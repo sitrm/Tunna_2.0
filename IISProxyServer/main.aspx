@@ -1,0 +1,1 @@
+<%@ Page Language="C#" AutoEventWireup="true" CodeFile="main.aspx.cs" Inherits="WSP.WebSocketProxy" %>
