@@ -22,17 +22,18 @@ namespace TcpToWebSocketProxy
         private readonly CancellationTokenSource _globalCts = new CancellationTokenSource();
 
         private readonly ILoggerService _logger;
-
+        private readonly SimpleClientService _clientService;
         //// В класс ProxyServer добавьте:
         //public event Action<string, ConsoleColor> LogMessage;
         //public event Action<Guid, string, string> ClientConnected;
         //public event Action<Guid> ClientDisconnected;
 
-        public ProxyServer(ILoggerService logger = null)
+        public ProxyServer(ILoggerService logger = null, SimpleClientService clientService = null)
         {
             _logger = logger;
+            _clientService = clientService;
             _clientManager = new ClientManager();
-            _webSocketConnection = new WebSocketConnection(WebSocketUrl, _clientManager, _logger);
+            _webSocketConnection = new WebSocketConnection(WebSocketUrl, _clientManager, _logger, _clientService);
         }
 
         public async Task Start()
@@ -71,7 +72,8 @@ namespace TcpToWebSocketProxy
                             targetPort,
                             _webSocketConnection,
                             _clientManager, 
-                            _logger
+                            _logger,
+                            _clientService
                         );
                         _ = client.HandleConnectionAsync(_globalCts.Token);   // target ip and port // SendDisconnectPacket
                     }

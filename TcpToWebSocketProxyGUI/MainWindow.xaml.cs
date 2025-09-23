@@ -16,7 +16,8 @@ namespace TcpToWebSocketProxyGUI
         private ProxyServer _proxyServer;
         private ObservableCollection<PortMapping> _portMappings;
         private ObservableCollection<ClientInfo> _connectedClients;
-       
+
+        private SimpleClientService _clientService;
         private ILoggerService _loggerService;
 
         public MainWindow()
@@ -25,6 +26,20 @@ namespace TcpToWebSocketProxyGUI
             InitializeLogger();
             InitializeCollections();
             LoadDefaultConfig();
+            InitializeServices();
+        }
+
+        private void InitializeServices()
+        {
+
+            _clientService = new SimpleClientService(Dispatcher);
+            dgClients.ItemsSource = _clientService.Clients;
+
+            // Подписываемся на изменение коллекции клиентов
+            _clientService.Clients.CollectionChanged += (s, e) =>
+            {
+                UpdateConnectedCount();
+            };
         }
         private void InitializeLogger()
         {
@@ -46,6 +61,15 @@ namespace TcpToWebSocketProxyGUI
             _portMappings.Add(new PortMapping { ListenPort = 1234, TargetIp = "192.168.181.134", TargetPort = 1433 });
             _portMappings.Add(new PortMapping { ListenPort = 9999, TargetIp = "127.0.0.1", TargetPort = 8888 });
         }
+
+        private void UpdateConnectedCount()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                txtConnectedCount.Text = _clientService.Clients.Count.ToString();
+            });
+        }
+
         private void LogToRichTextBox(string message, Color color)
         {
             Dispatcher.Invoke(() =>
@@ -67,7 +91,7 @@ namespace TcpToWebSocketProxyGUI
                 //var config = new ProxyConfig();
                 // Здесь нужно добавить метод для обновления конфигурации
 
-                _proxyServer = new ProxyServer(_loggerService);
+                _proxyServer = new ProxyServer(_loggerService, _clientService);
                 await _proxyServer.Start();
 
                 UpdateStatus("Running", Colors.Green);
@@ -92,6 +116,9 @@ namespace TcpToWebSocketProxyGUI
                     _proxyServer = null;
                 }
 
+                // Очищаем список клиентов при остановке сервера
+                _clientService.ClearAll();
+
                 UpdateStatus("Stopped", Colors.Red);
                 btnStart.IsEnabled = true;
                 btnStop.IsEnabled = false;
@@ -103,38 +130,7 @@ namespace TcpToWebSocketProxyGUI
                 _loggerService.LogError($"Error stopping server: {ex.Message}");
             }
         }
-
-        //private void LogMessage(string message, Color color)
-        //{
-        //    Dispatcher.Invoke(() =>
-        //    {
-        //        var logEntry = new LogEntry
-        //        {
-        //            Timestamp = DateTime.Now,
-        //            Message = message,
-        //            Color = color
-        //        };
-
-        //        _logEntries.Add(logEntry);
-
-        //        // Добавление в RichTextBox
-        //        var paragraph = new Paragraph();
-        //        paragraph.Inlines.Add(new Run($"[{logEntry.Timestamp:HH:mm:ss.fff}] {message}"));
-        //        paragraph.Foreground = new SolidColorBrush(color);
-
-        //        rtbLog.Document.Blocks.Add(paragraph);
-
-        //        // Авто-скролл
-        //        if (chkAutoScroll.IsChecked == true)
-        //        {
-        //            rtbLog.ScrollToEnd();
-        //        }
-
-        //        // Обновление статистики
-        //        UpdateStatistics();
-        //    });
-        //}
-
+      
         private void UpdateStatus(string status, Color color)
         {
             Dispatcher.Invoke(() =>
@@ -144,13 +140,6 @@ namespace TcpToWebSocketProxyGUI
             });
         }
 
-        //private void UpdateStatistics()
-        //{
-        //    Dispatcher.Invoke(() =>
-        //    {
-        //        txtStats.Text = $"Clients: {_connectedClients.Count} | Log entries: {_logEntries.Count}";
-        //    });
-        //}
 
         private void BtnAddMapping_Click(object sender, RoutedEventArgs e)
         {

@@ -17,12 +17,16 @@ namespace TcpToWebSocketProxy
         private readonly object _lock = new object();
 
         private readonly ILoggerService _logger;
-
-        public WebSocketConnection(string url, ClientManager clientManager, ILoggerService logger = null)
+        private readonly SimpleClientService _clientService;
+        public WebSocketConnection(string url, 
+                                    ClientManager clientManager, 
+                                    ILoggerService logger = null, 
+                                    SimpleClientService clientService = null)
         {
             _url = url;
             _clientManager = clientManager;
             _logger = logger;
+            _clientService = clientService;
         }
 
         public async Task ConnectAsync()

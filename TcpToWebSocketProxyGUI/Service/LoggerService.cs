@@ -17,7 +17,7 @@ namespace TcpToWebSocketProxyGUI.Services
 
         public void LogMessage(string message, Color color)
         {
-            _dispatcher.Invoke(() => _logAction?.Invoke($"[{DateTime.Now:HH:mm:ss.fff}] {message}", color));
+            _dispatcher.Invoke(() => _logAction?.Invoke($"[{DateTime.Now:HH:mm:ss}] {message}", color));
         }
 
         public void LogInfo(string message)

@@ -23,6 +23,7 @@ namespace TcpToWebSocketProxy
         private ConsoleColor _color;
 
         private readonly ILoggerService _logger;
+        private readonly SimpleClientService _clientService;
 
         //свойства только для чтения 
         public string TargetIp => _targetIp;
@@ -35,7 +36,8 @@ namespace TcpToWebSocketProxy
             int targetPort,
             WebSocketConnection webSocket,
             ClientManager clientManager,
-            ILoggerService logger = null)
+            ILoggerService logger = null,
+            SimpleClientService clientService = null)
         {
             _tcpClient = tcpClient;
             _networkStream = tcpClient.GetStream();
@@ -45,6 +47,7 @@ namespace TcpToWebSocketProxy
             _webSocket = webSocket;
             _clientManager = clientManager;
             _logger = logger;
+            _clientService = clientService;
         }
 
         public void SetColor(ConsoleColor color) => _color = color;
@@ -52,7 +55,11 @@ namespace TcpToWebSocketProxy
         public async Task HandleConnectionAsync(CancellationToken ct)
         {
             _clientManager.AddClient(_id, this);
-            Log($"[{DateTime.Now:HH:mm:ss.fff}] Client connected from {GetClientEndpoint()}");
+            // Получаем адрес клиента
+            string clientAddress = GetClientEndpoint();
+            // Добавляем клиента в GUI
+            _clientService?.AddClient(_id, _targetIp, _targetPort, clientAddress);
+            Log($"[{DateTime.Now:HH:mm:ss.fff}] Client connected from {clientAddress}");
 
             try
             {
@@ -66,6 +73,8 @@ namespace TcpToWebSocketProxy
             {
                 // Отправляем пакет отключения перед закрытием соединения
                 await _webSocket.SendDisconnectPacketAsync(_id, _targetIp, _targetPort);
+                // Удаляем клиента из GUI
+                _clientService?.RemoveClient(_id);
 
                 _clientManager.RemoveClient(_id);
                 _tcpClient.Close();
@@ -145,9 +154,21 @@ namespace TcpToWebSocketProxy
             };
         }
 
+        // Метод для получения адреса клиента
         private string GetClientEndpoint()
         {
-            return ((IPEndPoint)_tcpClient.Client.RemoteEndPoint).ToString();
+            try
+            {
+                if (_tcpClient?.Client?.RemoteEndPoint is IPEndPoint remoteEndPoint)
+                {
+                    return $"{remoteEndPoint.Address}:{remoteEndPoint.Port}";
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error getting client endpoint: {ex.Message}");
+            }
+            return "Unknown";
         }
     }
 }

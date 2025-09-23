@@ -56,12 +56,8 @@ namespace TcpToWebSocketProxyGUI.Models
         private string _id;
         private string _target;
         private string _status;
-        private System.ConsoleColor _color;
-        private string _localEndpoint;
-        private string _remoteEndpoint;
+        private string _clientAddress; // Новое поле: адрес клиента
         private DateTime _connectionTime;
-        private long _bytesSent;
-        private long _bytesReceived;
 
         public string Id
         {
@@ -92,33 +88,13 @@ namespace TcpToWebSocketProxyGUI.Models
                 OnPropertyChanged(nameof(Status));
             }
         }
-
-        public System.ConsoleColor Color
+        public string ClientAddress
         {
-            get => _color;
+            get => _clientAddress;
             set
             {
-                _color = value;
-                OnPropertyChanged(nameof(Color));
-            }
-        }
-        public string LocalEndpoint
-        {
-            get => _localEndpoint;
-            set
-            {
-                _localEndpoint = value;
-                OnPropertyChanged(nameof(LocalEndpoint));
-            }
-        }
-
-        public string RemoteEndpoint
-        {
-            get => _remoteEndpoint;
-            set
-            {
-                _remoteEndpoint = value;
-                OnPropertyChanged(nameof(RemoteEndpoint));
+                _clientAddress = value;
+                OnPropertyChanged(nameof(ClientAddress));
             }
         }
 
@@ -129,56 +105,10 @@ namespace TcpToWebSocketProxyGUI.Models
             {
                 _connectionTime = value;
                 OnPropertyChanged(nameof(ConnectionTime));
-                OnPropertyChanged(nameof(ConnectionDuration));
             }
         }
 
-        public string ConnectionDuration
-        {
-            get
-            {
-                if (ConnectionTime == DateTime.MinValue) return "N/A";
-                var duration = DateTime.Now - ConnectionTime;
-                return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
-            }
-        }
-
-        public long BytesSent
-        {
-            get => _bytesSent;
-            set
-            {
-                _bytesSent = value;
-                OnPropertyChanged(nameof(BytesSent));
-                OnPropertyChanged(nameof(BytesSentFormatted));
-            }
-        }
-
-        public long BytesReceived
-        {
-            get => _bytesReceived;
-            set
-            {
-                _bytesReceived = value;
-                OnPropertyChanged(nameof(BytesReceived));
-                OnPropertyChanged(nameof(BytesReceivedFormatted));
-            }
-        }
-        public string BytesSentFormatted => FormatBytes(BytesSent);
-        public string BytesReceivedFormatted => FormatBytes(BytesReceived);
-        public string TotalBytesFormatted => FormatBytes(BytesSent + BytesReceived);
-        private string FormatBytes(long bytes)
-        {
-            string[] suffixes = { "B", "KB", "MB", "GB" };
-            int counter = 0;
-            decimal number = bytes;
-            while (Math.Round(number / 1024) >= 1)
-            {
-                number /= 1024;
-                counter++;
-            }
-            return $"{number:n1} {suffixes[counter]}";
-        }
+        public string ConnectionInfo => $"Connected at {ConnectionTime:HH:mm:ss}";
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -186,10 +116,7 @@ namespace TcpToWebSocketProxyGUI.Models
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
-        public void UpdateDuration()
-        {
-            OnPropertyChanged(nameof(ConnectionDuration));
-        }
+        
     }
 
     
