@@ -11,7 +11,7 @@ namespace TcpToWebSocketProxy
         public Dictionary<int, (string TargetIp, int TargetPort)> PortMappings { get; } =
            new Dictionary<int, (string, int)>
            {
-                { 1234, ("192.168.181.134", 1433) },
+                { 1234, ("127.0.0.1", 1433) },
                 { 9999, ("127.0.0.1",    8888) }
            };
     }

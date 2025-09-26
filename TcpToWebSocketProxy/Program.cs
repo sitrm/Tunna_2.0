@@ -16,6 +16,7 @@ namespace TcpToWebSocketProxy
             Console.ReadKey();
 
             await proxy.Stop();
+
         }
     }
 }

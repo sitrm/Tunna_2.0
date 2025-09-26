@@ -38,7 +38,7 @@ namespace TcpToWebSocketProxy
             await _webSocket.SendAsync(
                 new ArraySegment<byte>(data),
                 WebSocketMessageType.Binary,
-                true,
+                true,                                // !!!!! что такое 
                 ct
             );
         }
@@ -68,7 +68,7 @@ namespace TcpToWebSocketProxy
 
         private async Task ReceiveMessagesAsync()
         {
-            var buffer = new byte[4096];
+            var buffer = new byte[4096];   // побольше!!! 16 100
 
             while (_webSocket?.State == WebSocketState.Open)
             {
@@ -77,9 +77,9 @@ namespace TcpToWebSocketProxy
                     var result = await _webSocket.ReceiveAsync(
                         new ArraySegment<byte>(buffer),
                         CancellationToken.None);
-                    //!!!!!!!!!!!!!!!!!! да норм 
-                    if (result.MessageType == WebSocketMessageType.Close)
-                        break;
+                    //!!!!!!!!!!!!!!!!!!
+                    //if (result.MessageType == WebSocketMessageType.Close)
+                    //    break;
 
                     var packet = DataPacket.Deserialize(buffer.AsSpan(0, result.Count).ToArray());
 
@@ -90,7 +90,7 @@ namespace TcpToWebSocketProxy
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"WebSocket receive error: {ex.Message}");
+                    Console.WriteLine($"WebSocket receive error: {ex.Message}");  //!!!!!!! select * from sys.databases
                     break;
                 }
             }

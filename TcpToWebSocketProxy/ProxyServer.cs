@@ -10,8 +10,8 @@ namespace TcpToWebSocketProxy
 {
     public class ProxyServer
     {
-        //private const string WebSocketUrl = "ws://localhost/WebsiteDeployment/webSocketProxyMult/main.aspx";
-        private const string WebSocketUrl = "ws://192.168.181.134/WebsiteDeployment/webSocketProxyMult/main.aspx";
+        private const string WebSocketUrl = "ws://localhost/WebsiteDeployment/webSocketProxyMult/main.aspx";
+        //private const string WebSocketUrl = "ws://192.168.181.134/WebsiteDeployment/webSocketProxyMult/main.aspx";
         private readonly ProxyConfig _config = new ProxyConfig();
         private readonly WebSocketConnection _webSocketConnection;
         private readonly ClientManager _clientManager;
@@ -64,7 +64,7 @@ namespace TcpToWebSocketProxy
                         _ = client.HandleConnectionAsync(_globalCts.Token);   // target ip and port // SendDisconnectPacket
                     }
                     catch (ObjectDisposedException)
-                    {
+                    { 
                         break;
                     }
                     catch (Exception ex)
