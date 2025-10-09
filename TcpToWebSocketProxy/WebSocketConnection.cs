@@ -12,13 +12,15 @@ namespace TcpToWebSocketProxy
     {
         private readonly string _url;
         private readonly ClientManager _clientManager;
+        private readonly int _bufferSize;
         private ClientWebSocket _webSocket;
         private readonly object _lock = new object();
 
-        public WebSocketConnection(string url, ClientManager clientManager)
+        public WebSocketConnection(string url, ClientManager clientManager, int bufferSize = 32768)
         {
             _url = url;
             _clientManager = clientManager;
+            _bufferSize = bufferSize;
         }
 
         public async Task ConnectAsync()
@@ -68,24 +70,39 @@ namespace TcpToWebSocketProxy
 
         private async Task ReceiveMessagesAsync()
         {
-            var buffer = new byte[4096];   // побольше!!! 16 100
+            var buffer = new byte[_bufferSize];   // побольше!!! 16 100
 
             while (_webSocket?.State == WebSocketState.Open)
             {
                 try
                 {
-                    var result = await _webSocket.ReceiveAsync(
-                        new ArraySegment<byte>(buffer),
-                        CancellationToken.None);
-                    //!!!!!!!!!!!!!!!!!!
-                    //if (result.MessageType == WebSocketMessageType.Close)
-                    //    break;
-
-                    var packet = DataPacket.Deserialize(buffer.AsSpan(0, result.Count).ToArray());
-
-                    if (_clientManager.TryGetClient(packet.UserId, out var client))
+                    // Используем MemoryStream для сборки полного сообщения
+                    using (var memoryStream = new MemoryStream())
                     {
-                        await client.ForwardToTcpAsync(packet.Data);
+                        WebSocketReceiveResult result;
+                        do
+                        {
+                            result = await _webSocket.ReceiveAsync(
+                                new ArraySegment<byte>(buffer),
+                                CancellationToken.None);
+
+                            if (result.MessageType == WebSocketMessageType.Close)
+                                break;
+
+                            memoryStream.Write(buffer, 0, result.Count);
+                        }
+                        while (!result.EndOfMessage);
+
+                        //if (result.MessageType == WebSocketMessageType.Close)
+                        //    break;
+
+                        // Получили полное сообщение
+                        var completeMessage = memoryStream.ToArray();
+
+                        if (completeMessage.Length > 0)
+                        {
+                            await ProcessReceivedMessage(completeMessage);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -95,7 +112,26 @@ namespace TcpToWebSocketProxy
                 }
             }
         }
+        private async Task ProcessReceivedMessage(byte[] messageData)
+        {
+            try
+            {
+                var packet = DataPacket.Deserialize(messageData);
 
+                if (_clientManager.TryGetClient(packet.UserId, out var client))
+                {
+                    await client.ForwardToTcpAsync(packet.Data);
+                }
+                else
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Unknown client ID: {packet.UserId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Error processing received message: {ex.Message}");
+            }
+        }
         public async Task DisconnectAsync()
         {
             if (_webSocket?.State == WebSocketState.Open)

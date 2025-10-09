@@ -19,6 +19,7 @@ namespace TcpToWebSocketProxy
         private readonly ClientManager _clientManager;
         private readonly Guid _id = Guid.NewGuid();
         private ConsoleColor _color;
+        private readonly int _bufferSize;
 
         //свойства только для чтения 
         public string TargetIp => _targetIp;
@@ -30,7 +31,8 @@ namespace TcpToWebSocketProxy
             string targetIp,
             int targetPort,
             WebSocketConnection webSocket,
-            ClientManager clientManager)
+            ClientManager clientManager,
+            int bufferSize)
         {
             _tcpClient = tcpClient;
             _networkStream = tcpClient.GetStream();
@@ -39,6 +41,7 @@ namespace TcpToWebSocketProxy
             _targetPort = targetPort;
             _webSocket = webSocket;
             _clientManager = clientManager;
+            _bufferSize = bufferSize;
         }
 
         public void SetColor(ConsoleColor color) => _color = color;
@@ -69,7 +72,7 @@ namespace TcpToWebSocketProxy
 
         private async Task ReceiveFromTcpAsync(CancellationToken ct)
         {
-            var buffer = new byte[4096];
+            var buffer = new byte[_bufferSize];
 
             while (!ct.IsCancellationRequested)
             {

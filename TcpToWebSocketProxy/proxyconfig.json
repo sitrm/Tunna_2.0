@@ -1,0 +1,26 @@
+{
+  "webSocketUrl": "ws://localhost/WebsiteDeployment/webSocketProxyMult/main.aspx",
+  "bufferSize": 32768,
+  "portMappings": [
+    {
+      "listenPort": 1234,
+      "targetIp": "127.0.0.1",
+      "targetPort": 1433
+    },
+    {
+      "listenPort": 9999,
+      "targetIp": "127.0.0.1",
+      "targetPort": 8888
+    },
+    {
+      "listenPort": 2222,
+      "targetIp": "192.168.181.131",
+      "targetPort": 22
+    },
+    {
+      "listenPort": 5555,
+      "targetIp": "192.168.181.131",
+      "targetPort": 5001
+    }
+  ]
+}
