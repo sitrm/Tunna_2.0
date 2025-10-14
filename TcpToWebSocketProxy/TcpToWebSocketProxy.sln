@@ -26,7 +26,13 @@ Project("{E24C65DC-7377-472B-9ABA-BC803B73C61A}") = "webSocketProxyMult", "http:
 		SlnRelativePath = "C:\inetpub\wwwroot\WebsiteDeployment\webSocketProxyMult\"
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TcpToWebSocketProxyGUI", "..\TcpToWebSocketProxyGUI\TcpToWebSocketProxyGUI.csproj", "{3F3478CF-6AB5-4D5C-A7EF-969428CB6D17}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TcpToWebSocketProxyGUI", "..\TcpToWebSocketProxyGUI\TcpToWebSocketProxyGUI.csproj", "{3F3478CF-6AB5-4D5C-A7EF-969428CB6D17}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{FBE509A4-3F80-40DD-B3AA-AD7CF13CD72F}"
+	ProjectSection(SolutionItems) = preProject
+		..\.gitignore = ..\.gitignore
+		..\README.md = ..\README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
