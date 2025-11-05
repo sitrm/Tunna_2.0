@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -12,15 +13,19 @@ namespace TcpToWebSocketProxy
     {
         private readonly string _url;
         private readonly ClientManager _clientManager;
-        private readonly int _bufferSize;
+        private readonly int _webSocketBufferSize;
+        private readonly int _maxMessageSize;
         private ClientWebSocket _webSocket;
         private readonly object _lock = new object();
 
-        public WebSocketConnection(string url, ClientManager clientManager, int bufferSize = 32768)
+        
+
+        public WebSocketConnection(string url, ClientManager clientManager, int webSocketBufferSize, int maxMessageSize)
         {
             _url = url;
             _clientManager = clientManager;
-            _bufferSize = bufferSize;
+            _webSocketBufferSize = webSocketBufferSize;
+            _maxMessageSize = maxMessageSize;
         }
 
         public async Task ConnectAsync()
@@ -36,13 +41,32 @@ namespace TcpToWebSocketProxy
 
         public async Task SendAsync(DataPacket packet, CancellationToken ct)
         {
-            var data = packet.Serialize();
-            await _webSocket.SendAsync(
-                new ArraySegment<byte>(data),
-                WebSocketMessageType.Binary,
-                true,                                // !!!!! что такое 
-                ct
-            );
+            
+            try
+            {
+                if (_webSocket?.State != WebSocketState.Open)
+                    throw new InvalidOperationException("WebSocket is not connected");
+
+                var data = packet.Serialize();
+
+                // Проверка размера сообщения
+                if (data.Length > _maxMessageSize)
+                {
+                    throw new InvalidOperationException($"Message size {data.Length} exceeds maximum allowed {_maxMessageSize}");
+                }
+
+                await _webSocket.SendAsync(
+                    new ArraySegment<byte>(data),
+                    WebSocketMessageType.Binary,
+                    true, // endOfMessage = true - мы всегда отправляем полные сообщения!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    //но если мы отправляем кусок то конец же не нужен
+                    ct
+                );
+            }
+            finally
+            {
+               
+            }
         }
         public async Task SendDisconnectPacketAsync(Guid clientId, string targetIp, int targetPort)
         {
@@ -67,16 +91,61 @@ namespace TcpToWebSocketProxy
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Error sending disconnect packet for client {clientId}: {ex.Message}");
             }
         }
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+        //private async Task ReceiveMessagesAsync()
+        //{
+        //    var buffer = new byte[_webSocketBufferSize];   // побольше!!! 16 100 5 
+
+        //    while (_webSocket?.State == WebSocketState.Open)
+        //    {
+        //        try
+        //        {
+        //            // Используем MemoryStream для сборки полного сообщения
+        //            using (var memoryStream = new MemoryStream())
+        //            {
+        //                WebSocketReceiveResult result;
+        //                do
+        //                {
+        //                    result = await _webSocket.ReceiveAsync(
+        //                        new ArraySegment<byte>(buffer),
+        //                        CancellationToken.None);
+
+        //                    if (result.MessageType == WebSocketMessageType.Close)
+        //                        break;
+
+        //                    memoryStream.Write(buffer, 0, result.Count);
+        //                }
+        //                while (!result.EndOfMessage && _webSocket.State == WebSocketState.Open);
+
+        //                if (result.MessageType == WebSocketMessageType.Close)
+        //                    break;
+
+        //                // Получили полное сообщение
+        //                var completeMessage = memoryStream.ToArray();
+
+        //                if (completeMessage.Length > 0)
+        //                {
+        //                    await ProcessReceivedMessage(completeMessage);
+        //                }
+        //            }
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            Console.WriteLine($"WebSocket receive error: {ex.Message}");  //!!!!!!! select * from sys.databases
+        //            break;
+        //        }
+        //    }
+        //}
         private async Task ReceiveMessagesAsync()
         {
-            var buffer = new byte[_bufferSize];   // побольше!!! 16 100
+            int initialBufferSize = _webSocketBufferSize;
 
             while (_webSocket?.State == WebSocketState.Open)
             {
+                var buffer = ArrayPool<byte>.Shared.Rent(initialBufferSize); 
                 try
                 {
-                    // Используем MemoryStream для сборки полного сообщения
                     using (var memoryStream = new MemoryStream())
                     {
                         WebSocketReceiveResult result;
@@ -91,12 +160,11 @@ namespace TcpToWebSocketProxy
 
                             memoryStream.Write(buffer, 0, result.Count);
                         }
-                        while (!result.EndOfMessage);
+                        while (!result.EndOfMessage && _webSocket.State == WebSocketState.Open);
 
-                        //if (result.MessageType == WebSocketMessageType.Close)
-                        //    break;
+                        if (result.MessageType == WebSocketMessageType.Close)
+                            break;
 
-                        // Получили полное сообщение
                         var completeMessage = memoryStream.ToArray();
 
                         if (completeMessage.Length > 0)
@@ -107,8 +175,12 @@ namespace TcpToWebSocketProxy
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"WebSocket receive error: {ex.Message}");  //!!!!!!! select * from sys.databases
+                    Console.WriteLine($"WebSocket receive error: {ex.Message}");
                     break;
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
                 }
             }
         }

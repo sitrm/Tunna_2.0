@@ -11,8 +11,14 @@ namespace TcpToWebSocketProxy
         [JsonPropertyName("portMappings")]
         public List<PortMapping> PortMappings { get; set; } = new List<PortMapping>();
 
-        [JsonPropertyName("bufferSize")]
-        public int BufferSize { get; set; } = 32768;
+        [JsonPropertyName("tcpBufferSize")]
+        public int TcpBufferSize { get; set; } = 64 * 1024; // 64KB для TCP
+
+        [JsonPropertyName("webSocketBufferSize")]
+        public int WebSocketBufferSize { get; set; } = 4 * 1024; // 4KB для WebSocket
+
+        [JsonPropertyName("maxWebSocketMessageSize")]
+        public int MaxWebSocketMessageSize { get; set; } = 1024 * 1024; // 1MB максимум
 
         public static ProxyConfig LoadFromFile(string filePath = "proxyconfig.json")
         {
@@ -56,6 +62,16 @@ namespace TcpToWebSocketProxy
                         throw new InvalidOperationException("Target IP cannot be empty");
                     }
                 }
+                // Дополнительная валидация размеров буферов
+                //if (config.TcpBufferSize < 1024 || config.TcpBufferSize > 1024 * 1024) // 1KB - 1MB
+                //{
+                //    throw new InvalidOperationException($"TCP buffer size must be between 1KB and 1MB");
+                //}
+
+                //if (config.WebSocketBufferSize < 1024 || config.WebSocketBufferSize > 64 * 1024) // 1KB - 64KB
+                //{
+                //    throw new InvalidOperationException($"WebSocket buffer size must be between 1KB and 64KB");
+                //}
 
                 Console.WriteLine($"Configuration loaded successfully from: {filePath}");
                 return config;

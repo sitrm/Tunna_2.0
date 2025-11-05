@@ -25,9 +25,9 @@ namespace UtilDataPacket
         {
             UserId = userId;    // 16 
             Type = type;        // 4
-            Data = data;        // N
             TargetIp = targetIp;   // 4
             TargetPort = targetPort;   // N
+            Data = data;        // N
         }
         public DataPacket(Guid userId, MessageType type, string text, string targetIp, int targetPort) : this(userId, type, Encoding.UTF8.GetBytes(text), targetIp, targetPort)
         {

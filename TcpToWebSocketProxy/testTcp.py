@@ -2,7 +2,7 @@ import socket
 import time
 import threading
 
-def tcp_speed_test(host='127.0.0.1', port=5222, duration=10):
+def tcp_speed_test(host='127.0.0.1', port=9999, duration=10):
     test_data = b'X' * 2  # 1KB блок данных
     total_sent = 0
     start_time = time.time()

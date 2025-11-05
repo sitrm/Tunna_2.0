@@ -1,6 +1,6 @@
 {
   "webSocketUrl": "ws://localhost/WebsiteDeployment/webSocketProxyMult/main.aspx",
-  "bufferSize": 10,
+  "bufferSize": 5,
   "portMappings": [
     {
       "listenPort": 1234,

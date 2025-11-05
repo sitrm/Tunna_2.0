@@ -23,7 +23,11 @@ namespace TcpToWebSocketProxy
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
             _clientManager = new ClientManager();
-            _webSocketConnection = new WebSocketConnection(_config.WebSocketUrl, _clientManager, _config.BufferSize);
+            _webSocketConnection = new WebSocketConnection(_config.WebSocketUrl, 
+                                                           _clientManager,     
+                                                           _config.WebSocketBufferSize,                                                                     _config.MaxWebSocketMessageSize
+                                                           );
+                                                                
         }
 
         public async Task Start()
@@ -41,7 +45,7 @@ namespace TcpToWebSocketProxy
 
         private void StartTcpListener(int port, string targetIp, int targetPort)
         {
-            var listener = new TcpListener(IPAddress.Any, port);
+            var listener = new TcpListener(IPAddress.Parse("127.0.0.2"), port);
             listener.Start();
             _listeners.Add(listener);
             Console.WriteLine($"Listening on port {port} -> {targetIp}:{targetPort}");
@@ -59,7 +63,7 @@ namespace TcpToWebSocketProxy
                             targetPort,
                             _webSocketConnection,
                             _clientManager,
-                            _config.BufferSize
+                            _config.TcpBufferSize
                         );
                         _ = client.HandleConnectionAsync(_globalCts.Token);   // target ip and port // SendDisconnectPacket
                     }

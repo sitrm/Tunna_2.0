@@ -45,7 +45,9 @@ namespace TcpToWebSocketProxy
 
                 // Выводим информацию о конфигурации
                 Console.WriteLine($"WebSocket URL: {config.WebSocketUrl}");
-                Console.WriteLine($"Buffer size: {config.BufferSize}");
+                Console.WriteLine($"TcpBuffer size: {config.TcpBufferSize}");
+                Console.WriteLine($"Buffer size: {config.WebSocketBufferSize}");
+                Console.WriteLine($"Max WSMessage size: {config.MaxWebSocketMessageSize}");
                 Console.WriteLine("Port mappings:");
                 foreach (var mapping in config.PortMappings)
                 {
