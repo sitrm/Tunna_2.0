@@ -58,66 +58,104 @@ namespace TcpToWebSocketProxy
             }
             catch (Exception ex)
             {
-                Log($"Error: {ex.Message}");
+                Log($"[{DateTime.Now:HH:mm:ss.fff}] !!! (HandleConnectionAsync) Error: {ex.Message}");
             }
             finally
             {
                 // Отправляем пакет отключения перед закрытием соединения
                 await _webSocket.SendDisconnectPacketAsync(_id, _targetIp, _targetPort);
 
+                await Task.Delay(300); // !!!!!!!!!!!!!!!!
+
                 _clientManager.RemoveClient(_id);
                 _tcpClient.Close();
-                Log($"[{DateTime.Now:HH:mm:ss.fff}] Connection closed");
+                Log($"[{DateTime.Now:HH:mm:ss.fff}] (HandleConnectionAsync - finally) Connection closed");
             }
         }
-
+        //----------------------------------------------------------------------------------
         //private async Task ReceiveFromTcpAsync(CancellationToken ct)
         //{
-        //    var buffer = new byte[_bufferSize];
-
         //    while (!ct.IsCancellationRequested && _tcpClient.Connected)
         //    {
-        //        var bytesRead = await _networkStream.ReadAsync(buffer, 0, buffer.Length, ct);
-        //        if (bytesRead == 0) break;   // Соединение закрыто удаленной стороной
+        //        var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
+        //        try
+        //        {
+        //            int bytesRead = await _networkStream.ReadAsync(buffer, 0, _bufferSize, ct);
+        //            if (bytesRead == 0) break; // Соединение закрыто удаленной стороной
 
-        //        var packet = new DataPacket(
-        //            _id,
-        //            MessageType.Binary,
-        //            buffer.AsSpan(0, bytesRead).ToArray(),
-        //            _targetIp,
-        //            _targetPort);
+        //            var packet = new DataPacket(
+        //                _id,
+        //                MessageType.Binary,
+        //                buffer.AsSpan(0, bytesRead).ToArray(), // Создаем копию только нужных данных
+        //                _targetIp,
+        //                _targetPort);
 
-        //        await _webSocket.SendAsync(packet, ct);
-        //        Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {bytesRead} bytes to WebSocket");
+        //            await _webSocket.SendAsync(packet, ct);
+        //            Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {bytesRead} bytes to WebSocket");
+        //        }
+        //        finally
+        //        {
+        //            ArrayPool<byte>.Shared.Return(buffer);
+        //        }
         //    }
         //}
         private async Task ReceiveFromTcpAsync(CancellationToken ct)
         {
-            while (!ct.IsCancellationRequested && _tcpClient.Connected)
+            var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
+            var accumulatedData = new MemoryStream();
+
+            try
             {
-                var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
-                try
+                while (!ct.IsCancellationRequested && _tcpClient.Connected)
                 {
                     int bytesRead = await _networkStream.ReadAsync(buffer, 0, _bufferSize, ct);
-                    if (bytesRead == 0) break; // Соединение закрыто удаленной стороной
+                    if (bytesRead == 0)
+                    {
+                        // Соединение закрыто удаленной стороной - отправляем накопленные данные
+                        if (accumulatedData.Length > 0)
+                        {
+                            await SendAccumulatedDataAsync(accumulatedData, ct);
+                        }
+                        break;
+                    }
 
-                    var packet = new DataPacket(
-                        _id,
-                        MessageType.Binary,
-                        buffer.AsSpan(0, bytesRead).ToArray(), // Создаем копию только нужных данных
-                        _targetIp,
-                        _targetPort);
+                    // Записываем прочитанные данные в поток
+                    await accumulatedData.WriteAsync(buffer, 0, bytesRead, ct);
+                    //await Task.Delay(10, ct);
+                    // Если накопили достаточно данных или это последний пакет, отправляем
+                    if (bytesRead < _bufferSize)
+                    {
+                        await SendAccumulatedDataAsync(accumulatedData, ct);
+                    }
 
-                    await _webSocket.SendAsync(packet, ct);
-                    Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {bytesRead} bytes to WebSocket");
+                    //Log($"[{DateTime.Now:HH:mm:ss.fff}] Accumulated {bytesRead} bytes, total: {accumulatedData.Length}");
                 }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(buffer);
-                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+                accumulatedData?.Dispose();
             }
         }
 
+        private async Task SendAccumulatedDataAsync(MemoryStream accumulatedData, CancellationToken ct)
+        {
+            if (accumulatedData.Length == 0) return;
+
+            var packet = new DataPacket(
+                _id,
+                MessageType.Binary,
+                accumulatedData.ToArray(), // Получаем все накопленные данные
+                _targetIp,
+                _targetPort);
+
+            await _webSocket.SendAsync(packet, ct);
+            Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {accumulatedData.Length} accumulated bytes to WebSocket");
+
+            // Сбрасываем поток для следующих данных
+            accumulatedData.SetLength(0);
+        }
+        //------------------------------------------------------------------------------------------------
         public async Task ForwardToTcpAsync(byte[] data)
         {
             //await _networkStream.WriteAsync(data, 0, data.Length);
@@ -135,16 +173,16 @@ namespace TcpToWebSocketProxy
                 }
                 else
                 {
-                    Log("Cannot forward data - TCP connection is closed");
+                    Log($"[{DateTime.Now:HH:mm:ss.fff}] !!!(ForwardToTcpAsync)Cannot forward data - TCP connection is closed");
                 }
             }
             catch (IOException ex)
             {
-                Log($"Error writing to TCP: {ex.Message}");
+                Log($"[{DateTime.Now:HH:mm:ss.fff}] !!!(ForwardToTcpAsync) Error writing to TCP: {ex.Message}");
             }
             catch (Exception ex)
             {
-                Log($"Unexpected error writing to TCP: {ex.Message}");
+                Log($"[{DateTime.Now:HH:mm:ss.fff}] Unexpected error writing to TCP: {ex.Message}");
             }
         }
 

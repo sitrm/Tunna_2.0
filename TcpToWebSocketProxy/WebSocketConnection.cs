@@ -84,11 +84,11 @@ namespace TcpToWebSocketProxy
                 );
 
                 await SendAsync(disconnectPacket, CancellationToken.None);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Disconnect packet sent for client: {clientId}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] *** Disconnect packet sent for client: {clientId}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Error sending disconnect packet for client {clientId}: {ex.Message}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] *** Error sending disconnect packet for client {clientId}: {ex.Message}");
             }
         }
         //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -175,7 +175,7 @@ namespace TcpToWebSocketProxy
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"WebSocket receive error: {ex.Message}");
+                    Console.WriteLine($"*** (ReceiveMessagesAsync) WebSocket receive error: {ex.Message}");
                     break;
                 }
                 finally
@@ -196,12 +196,12 @@ namespace TcpToWebSocketProxy
                 }
                 else
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Unknown client ID: {packet.UserId}");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] *** (ProcessReceivedMessage) Unknown client ID: {packet.UserId}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] Error processing received message: {ex.Message}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] *** Error processing received message: {ex.Message}");
             }
         }
         public async Task DisconnectAsync()
