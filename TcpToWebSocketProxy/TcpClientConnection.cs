@@ -65,95 +65,40 @@ namespace TcpToWebSocketProxy
                 // Отправляем пакет отключения перед закрытием соединения
                 await _webSocket.SendDisconnectPacketAsync(_id, _targetIp, _targetPort);
 
-                await Task.Delay(300); // !!!!!!!!!!!!!!!!
 
                 _clientManager.RemoveClient(_id);
                 _tcpClient.Close();
                 Log($"[{DateTime.Now:HH:mm:ss.fff}] (HandleConnectionAsync - finally) Connection closed");
             }
         }
-        //----------------------------------------------------------------------------------
-        //private async Task ReceiveFromTcpAsync(CancellationToken ct)
-        //{
-        //    while (!ct.IsCancellationRequested && _tcpClient.Connected)
-        //    {
-        //        var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
-        //        try
-        //        {
-        //            int bytesRead = await _networkStream.ReadAsync(buffer, 0, _bufferSize, ct);
-        //            if (bytesRead == 0) break; // Соединение закрыто удаленной стороной
-
-        //            var packet = new DataPacket(
-        //                _id,
-        //                MessageType.Binary,
-        //                buffer.AsSpan(0, bytesRead).ToArray(), // Создаем копию только нужных данных
-        //                _targetIp,
-        //                _targetPort);
-
-        //            await _webSocket.SendAsync(packet, ct);
-        //            Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {bytesRead} bytes to WebSocket");
-        //        }
-        //        finally
-        //        {
-        //            ArrayPool<byte>.Shared.Return(buffer);
-        //        }
-        //    }
-        //}
+        //--------------------------------------------------------------------------
         private async Task ReceiveFromTcpAsync(CancellationToken ct)
         {
             var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
-            var accumulatedData = new MemoryStream();
-
             try
             {
                 while (!ct.IsCancellationRequested && _tcpClient.Connected)
                 {
                     int bytesRead = await _networkStream.ReadAsync(buffer, 0, _bufferSize, ct);
-                    if (bytesRead == 0)
-                    {
-                        // Соединение закрыто удаленной стороной - отправляем накопленные данные
-                        if (accumulatedData.Length > 0)
-                        {
-                            await SendAccumulatedDataAsync(accumulatedData, ct);
-                        }
-                        break;
-                    }
+                    if (bytesRead == 0) break;
+                    var data = buffer.AsMemory(0, bytesRead);
+                    // Отправляем КАЖДЫЙ кусок сразу!!!
+                    var packet = new DataPacket(
+                        _id,
+                        MessageType.Binary,
+                        data.ToArray(),
+                        _targetIp,
+                        _targetPort
+                    );
+                    await _webSocket.SendAsync(packet, ct);
 
-                    // Записываем прочитанные данные в поток
-                    await accumulatedData.WriteAsync(buffer, 0, bytesRead, ct);
-                    //await Task.Delay(10, ct);
-                    // Если накопили достаточно данных или это последний пакет, отправляем
-                    if (bytesRead < _bufferSize)
-                    {
-                        await SendAccumulatedDataAsync(accumulatedData, ct);
-                    }
-
-                    //Log($"[{DateTime.Now:HH:mm:ss.fff}] Accumulated {bytesRead} bytes, total: {accumulatedData.Length}");
+                    Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {bytesRead} bytes to WebSocket");
                 }
             }
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
-                accumulatedData?.Dispose();
             }
-        }
-
-        private async Task SendAccumulatedDataAsync(MemoryStream accumulatedData, CancellationToken ct)
-        {
-            if (accumulatedData.Length == 0) return;
-
-            var packet = new DataPacket(
-                _id,
-                MessageType.Binary,
-                accumulatedData.ToArray(), // Получаем все накопленные данные
-                _targetIp,
-                _targetPort);
-
-            await _webSocket.SendAsync(packet, ct);
-            Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {accumulatedData.Length} accumulated bytes to WebSocket");
-
-            // Сбрасываем поток для следующих данных
-            accumulatedData.SetLength(0);
         }
         //------------------------------------------------------------------------------------------------
         public async Task ForwardToTcpAsync(byte[] data)
@@ -161,6 +106,8 @@ namespace TcpToWebSocketProxy
             //await _networkStream.WriteAsync(data, 0, data.Length);
             //await _networkStream.FlushAsync();
             //Log($"[{DateTime.Now:HH:mm:ss.fff}] Forwarded {data.Length} bytes to TCP client");
+            if (data == null || data.Length == 0 || !_tcpClient.Connected)
+                return;
             try
             {
                 if (_tcpClient.Connected )

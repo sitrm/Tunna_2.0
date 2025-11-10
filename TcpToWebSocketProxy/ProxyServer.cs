@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -19,6 +20,7 @@ namespace TcpToWebSocketProxy
         private readonly List<TcpListener> _listeners = new List<TcpListener>();
         private readonly CancellationTokenSource _globalCts = new CancellationTokenSource();
         private bool _disposed = false;
+
         public ProxyServer(ProxyConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -27,7 +29,6 @@ namespace TcpToWebSocketProxy
                                                            _clientManager,     
                                                            _config.WebSocketBufferSize,                                                                     _config.MaxWebSocketMessageSize
                                                            );
-                                                                
         }
 
         public async Task Start()
@@ -108,6 +109,7 @@ namespace TcpToWebSocketProxy
         //корректного освобождения неуправляемых ресурсов
         public void Dispose()
         {
+
             if (!_disposed)
             {
                 Stop().GetAwaiter().GetResult();    // 2. Остановка сервера -  Синхронное ожидание остановки
@@ -115,5 +117,8 @@ namespace TcpToWebSocketProxy
                 _disposed = true;                    // 4. Помечаем как освобожденный
             }
         }
+        //----------------------------------------------------------------
+
+
     }
 }
