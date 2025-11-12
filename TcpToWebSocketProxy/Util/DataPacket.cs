@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -13,6 +14,9 @@ namespace UtilDataPacket
     [Serializable]
     public class DataPacket
     {
+
+        private const uint MAGIC_NUMBER = 0xDEADBEEF; //(4 байта)
+
         public Guid UserId { get; set; }
         public MessageType Type { get; set; }
         public byte[] Data { get; set; }
@@ -40,8 +44,8 @@ namespace UtilDataPacket
             using (var ms = new MemoryStream())
             using (var writer = new BinaryWriter(ms))
             {
-                // Заголовок пакета (4 байта)
-                //writer.Write(0xDEADBEEF); // Magic number для идентификации пакета 
+                //Заголовок пакета(4 байта)
+                writer.Write(MAGIC_NUMBER); // Magic number для идентификации пакета 
 
                 // UserId (16 байт)
                 writer.Write(UserId.ToByteArray());
@@ -65,8 +69,8 @@ namespace UtilDataPacket
                     writer.Write(Data);
 
                 //// Контрольная сумма (4 байта)
-                //var dataHash = ComputeChecksum(ms.ToArray(), 0, (int)ms.Length - 4);
-                //writer.Write(dataHash);
+                var checksum = ComputeChecksum(ms.ToArray());
+                writer.Write(checksum);
 
                 return ms.ToArray();
             }
@@ -77,15 +81,17 @@ namespace UtilDataPacket
         /// </summary>
         public static DataPacket Deserialize(byte[] data)
         {
-            //if (data == null || data.Length < 28) // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 4(length)
-            //    throw new InvalidDataException("Packet too short or null");
+            if (data == null || data.Length < 36) 
+            // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 4(ipLen) + 4(port) + 4(dataLen) + 4(checksum)
+                throw new InvalidDataException("Packet too short or null");
+
             using (var ms = new MemoryStream(data))
             using (var reader = new BinaryReader(ms))
             {
                 // Проверка magic number
-                //var magic = reader.ReadInt32();
-                //if (magic != 0xDEADBEEF)
-                //    throw new InvalidDataException("Invalid packet format
+                var magic = reader.ReadUInt32();
+                if (magic != MAGIC_NUMBER)
+                    throw new InvalidDataException("Invalid packet format");
 
                 // Чтение UserId
                 var guidBytes = reader.ReadBytes(16);
@@ -98,7 +104,7 @@ namespace UtilDataPacket
                 var ipLength = reader.ReadInt32();
                 // чтение TargetIp N байт 
                 string targetIp = null;
-                if (ipLength > 0)
+                if (ipLength > 0 || ipLength < 1024)
                     targetIp = Encoding.UTF8.GetString(reader.ReadBytes(ipLength));
 
                 // Чтение TargetPort 4 
@@ -112,12 +118,14 @@ namespace UtilDataPacket
                 if (dataLength > 0)
                     packetData = reader.ReadBytes(dataLength);
 
-                //// Чтение и проверка контрольной суммы
-                //var storedChecksum = reader.ReadInt32();
-                //var actualChecksum = ComputeChecksum(data, 0, data.Length - 4);
+                // Чтение и проверка контрольной суммы
+                var storedChecksum = reader.ReadInt32();
+                var dataForChecksum = new byte[data.Length - 4];
+                Buffer.BlockCopy(data, 0, dataForChecksum, 0, dataForChecksum.Length);
+                var calculatedChecksum = ComputeChecksum(dataForChecksum);
 
-                //if (storedChecksum != actualChecksum)
-                //    throw new InvalidDataException("Data corruption detected");
+                if (storedChecksum != calculatedChecksum)
+                    throw new InvalidDataException("Data corruption detected: checksum mismatch");
 
                 return new DataPacket
                 {
@@ -129,25 +137,23 @@ namespace UtilDataPacket
                 };
             }
         }
-
-        ///// <summary>
-        ///// Вычисление контрольной суммы
-        ///// </summary>
-        //private static int ComputeChecksum(byte[] data, int offset, int count)
-        //{
-        //    using (var md5 = MD5.Create())
-        //    {
-        //        var hash = md5.ComputeHash(data, offset, count);
-        //        return BitConverter.ToInt32(hash, 0);
-        //    }
-        //}
-
         /// <summary>
         /// Получение данных как строки
         /// </summary>
         public string GetDataAsString()
         {
             return Data != null ? Encoding.UTF8.GetString(Data) : null;
+        }
+        /// <summary>
+        /// Вычисление контрольной суммы с использованием MD5
+        /// </summary>
+        private static int ComputeChecksum(byte[] data)
+        {
+            using (var md5 = MD5.Create())
+            {
+                var hash = md5.ComputeHash(data);
+                return BitConverter.ToInt32(hash, 0);
+            }
         }
     }
 }

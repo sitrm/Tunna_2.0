@@ -91,52 +91,7 @@ namespace TcpToWebSocketProxy
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] *** Error sending disconnect packet for client {clientId}: {ex.Message}");
             }
         }
-        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-        //private async Task ReceiveMessagesAsync()
-        //{
-        //    var buffer = new byte[_webSocketBufferSize];   // побольше!!! 16 100 5 
-
-        //    while (_webSocket?.State == WebSocketState.Open)
-        //    {
-        //        try
-        //        {
-        //            // Используем MemoryStream для сборки полного сообщения
-        //            using (var memoryStream = new MemoryStream())
-        //            {
-        //                WebSocketReceiveResult result;
-        //                do
-        //                {
-        //                    result = await _webSocket.ReceiveAsync(
-        //                        new ArraySegment<byte>(buffer),
-        //                        CancellationToken.None);
-
-        //                    if (result.MessageType == WebSocketMessageType.Close)
-        //                        break;
-
-        //                    memoryStream.Write(buffer, 0, result.Count);
-        //                }
-        //                while (!result.EndOfMessage && _webSocket.State == WebSocketState.Open);
-
-        //                if (result.MessageType == WebSocketMessageType.Close)
-        //                    break;
-
-        //                // Получили полное сообщение
-        //                var completeMessage = memoryStream.ToArray();
-
-        //                if (completeMessage.Length > 0)
-        //                {
-        //                    await ProcessReceivedMessage(completeMessage);
-        //                }
-        //            }
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            Console.WriteLine($"WebSocket receive error: {ex.Message}");  //!!!!!!! select * from sys.databases
-        //            break;
-        //        }
-        //    }
-        //}
+        //----------------------------------------------------------
         private async Task ReceiveMessagesAsync()
         {
             int initialBufferSize = _webSocketBufferSize;
