@@ -14,6 +14,7 @@ using System.Buffers;
 using System.Security.Cryptography;
 using System.Collections.Concurrent;
 using System.Web.UI.WebControls;
+using System.Linq;
 
 
 namespace WSP
@@ -36,7 +37,7 @@ namespace WSP
         private static readonly ConcurrentDictionary<Guid, ConnectionTarget> _connectionTargets = 
             new ConcurrentDictionary<Guid, ConnectionTarget>();
 
-        int SIZE_BUF = 64000;
+        int SIZE_BUF = 32000;
         //----------------------------------------------------------------------------------------------------
         protected void Page_Load(object sender, EventArgs e)
         {
@@ -164,78 +165,7 @@ namespace WSP
             }
         }
 
-        //----------------------------------------------------------------------------------------------------
-        //private async Task ForwardToTcpServer(WebSocket webSocket, DataPacket packet)
-        //{
-        //    string connectionKey = GetConnectionKey(packet.TargetIp, packet.TargetPort);
-        //    TcpClient tcpClient = null;
-        //    NetworkStream networkStream = null;
-
-        //    try
-        //    {
-        //        // Получаем или создаем TCP соединение
-        //        tcpClient = GetOrCreateTcpClient(webSocket, connectionKey, packet.TargetIp, packet.TargetPort);
-        //        networkStream = tcpClient.GetStream();
-
-        //        // Отправляем данные на TCP сервер
-        //        await networkStream.WriteAsync(packet.Data, 0, packet.Data.Length);
-
-        //        // Устанавливаем таймаут для чтения
-        //        using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
-        //        {
-        //            try
-        //            {
-        //                // Читаем ответ от TCP сервера асинхронно с таймаутом
-        //                byte[] responseBuffer = new byte[SIZE_BUF];
-        //                // Асинхронно читаем ответ
-        //                int bytesRead = await networkStream.ReadAsync(responseBuffer, 0, responseBuffer.Length, timeoutCts.Token);
-
-        //                if (bytesRead > 0)
-        //                {
-        //                    // Подготавливаем ответные данные
-        //                    byte[] responseData = new byte[bytesRead];
-        //                    Array.Copy(responseBuffer, 0, responseData, 0, bytesRead);
-
-        //                    // Создаем пакет ответа
-        //                    DataPacket responsePacket = new DataPacket(
-        //                        packet.UserId,
-        //                        packet.Type,
-        //                        responseData,
-        //                        packet.TargetIp,
-        //                        packet.TargetPort
-        //                    );
-
-        //                    // Отправляем ответ обратно через WebSocket
-        //                    byte[] serializedResponse = responsePacket.Serialize();
-        //                    await webSocket.SendAsync(
-        //                        new ArraySegment<byte>(serializedResponse),
-        //                        WebSocketMessageType.Binary,
-        //                        true,
-        //                        CancellationToken.None
-        //                    );
-        //                }
-        //            }
-        //            catch (OperationCanceledException)
-        //            {
-        //                // Таймаут чтения - это нормально, не все серверы отправляют ответ
-        //                System.Diagnostics.Trace.TraceWarning("Read timeout for TCP server: " + connectionKey);
-        //            }
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // Если соединение разорвано, удаляем его из кэша
-        //        if (tcpClient != null && !tcpClient.Connected)
-        //        {
-        //            RemoveTcpClient(webSocket, connectionKey);
-        //        }
-
-        //        // Отправляем ошибку клиенту
-        //        SendErrorResponse(webSocket, packet, ex);
-        //    }
-        //}
         //---------------------------------------------------------------------------------------------------
-        //
         private async Task ForwardToTcpServer(Guid connectionId, DataPacket packet)
         {
             var tcpClient = GetOrCreateTcpClient(connectionId, packet);
@@ -256,74 +186,130 @@ namespace WSP
         //---------------------------------------------------------------------------------------------------
 
         // Функция для чтения данных от TCP 
-        //33333333333333
+        //1111111111111111111
+        //private async Task ReadFromTcpServer(Guid connectionId, TcpClient tcpClient, DataPacket packet)
+        //{
+        //    Guid userId = packet.UserId;
+        //    var stream = tcpClient.GetStream();
+        //    var buffer = ArrayPool<byte>.Shared.Rent(SIZE_BUF);
+        //    var accumulated = new MemoryStream();
+
+        //    try
+        //    {
+        //        WebSocket ws = null;
+        //        ConnectionTarget target = null;
+        //        while (tcpClient.Connected &&
+        //               _webSockets.TryGetValue(connectionId, out ws) &&
+        //               ws.State == WebSocketState.Open &&
+        //               _connectionTargets.TryGetValue(connectionId, out target))
+        //        {
+        //            int bytesRead = 0;
+        //            try
+        //            {
+        //                bytesRead = await stream.ReadAsync(buffer, 0, SIZE_BUF);
+        //            }
+        //            catch
+        //            {
+        //                break; // Ошибка чтения
+        //            }
+
+        //            if (bytesRead == 0) break;
+
+        //            await accumulated.WriteAsync(buffer, 0, bytesRead);
+        //            await SendAccumulatedDataAsync(ws, userId, accumulated, target.Ip, target.Port);
+        //        }
+        //    }
+        //    catch { }
+        //    finally
+        //    {
+        //        ArrayPool<byte>.Shared.Return(buffer);
+        //        accumulated.Dispose();
+        //        RemoveTcpClient(connectionId);
+        //    }
+        //}
+        //22222222222222222222222
         private async Task ReadFromTcpServer(Guid connectionId, TcpClient tcpClient, DataPacket packet)
         {
             Guid userId = packet.UserId;
             var stream = tcpClient.GetStream();
             var buffer = ArrayPool<byte>.Shared.Rent(SIZE_BUF);
-            var accumulated = new MemoryStream();
 
             try
             {
                 WebSocket ws = null;
                 ConnectionTarget target = null;
-                while (tcpClient.Connected &&
-                       _webSockets.TryGetValue(connectionId, out ws) &&
-                       ws.State == WebSocketState.Open &&
-                       _connectionTargets.TryGetValue(connectionId, out target))
+                while (tcpClient.Connected)
                 {
-                    int bytesRead = 0;
+                    int bytesRead;
                     try
                     {
                         bytesRead = await stream.ReadAsync(buffer, 0, SIZE_BUF);
                     }
-                    catch
+                    catch (IOException)
                     {
-                        break; // Ошибка чтения
+                        break; // TCP разорван
                     }
 
                     if (bytesRead == 0) break;
 
-                    await accumulated.WriteAsync(buffer, 0, bytesRead);
-                    await SendAccumulatedDataAsync(ws, userId, accumulated, target.Ip, target.Port);
+                    if (!_webSockets.TryGetValue(connectionId, out ws) || ws.State != WebSocketState.Open)
+                        break;
+
+                    if (!_connectionTargets.TryGetValue(connectionId, out target))
+                        break;
+
+                    var responsePacket = new DataPacket(
+                        userId,
+                        MessageType.Binary,
+                        new ArraySegment<byte>(buffer, 0, bytesRead).ToArray(),
+                        target.Ip,
+                        target.Port
+                    );
+
+                    var serialized = responsePacket.Serialize();
+
+                    try
+                    {
+                        await ws.SendAsync(
+                            new ArraySegment<byte>(serialized),
+                            WebSocketMessageType.Binary,
+                            true,
+                            CancellationToken.None
+                        );
+                    }
+                    catch
+                    {
+                        break; // WebSocket мёртв
+                    }
                 }
             }
-            catch { }
             finally
             {
                 ArrayPool<byte>.Shared.Return(buffer);
-                accumulated.Dispose();
                 RemoveTcpClient(connectionId);
             }
         }
+        //private async Task SendAccumulatedDataAsync(WebSocket ws, Guid userId, MemoryStream accumulated,
+        //    string targetIp, int targetPort)
+        //{
+        //    if (accumulated.Length == 0) return;
 
-        private async Task SendAccumulatedDataAsync(WebSocket ws, Guid userId, MemoryStream accumulated,
-            string targetIp, int targetPort)
-        {
-            if (accumulated.Length == 0) return;
+        //    var data = accumulated.ToArray();
+        //    var responsePacket = new DataPacket(userId, MessageType.Binary, data, targetIp, targetPort);
+        //    var serialized = responsePacket.Serialize();
 
-            var data = accumulated.ToArray();
-            var responsePacket = new DataPacket(userId, MessageType.Binary, data, targetIp, targetPort);
-            var serialized = responsePacket.Serialize();
+        //    try
+        //    {
+        //        await ws.SendAsync(new ArraySegment<byte>(serialized), 
+        //                            WebSocketMessageType.Binary, 
+        //                            true, 
+        //                            CancellationToken.None);
+        //    }
+        //    catch { }
 
-            try
-            {
-                await ws.SendAsync(new ArraySegment<byte>(serialized), 
-                                    WebSocketMessageType.Binary, 
-                                    true, 
-                                    CancellationToken.None);
-            }
-            catch { }
+        //    accumulated.SetLength(0);
+        //}
 
-            accumulated.SetLength(0);
-        }
-
-        //---------------------------------------------------------------------------------------------------
-        private string GetConnectionKey(Guid userId)
-        {
-            return userId.ToString();
-        }
         //----------------------------------------------------------------------------------------------------
         private TcpClient GetOrCreateTcpClient(Guid connectionId, DataPacket packet)
         {
@@ -358,45 +344,6 @@ namespace WSP
                     throw;
                 }
             });
-        }
-        //----------------------------------------------------------------------------------------------------
-        //private async Task MonitorTcpConnection(WebSocket webSocket, string connectionKey, TcpClient tcpClient)
-        //{
-        //    try
-        //    {
-        //        while (tcpClient.Connected)  // Пока соединение активно
-        //        {
-        //            await Task.Delay(5000); // Проверяем каждые 5 секунд
-
-        //            // Проверяем соединение отправкой пустого пакета
-        //            if (!IsTcpClientConnected(tcpClient))
-        //            {
-        //                RemoveTcpClient(connectionKey);    //Удаляем если отвалилось
-        //                break;
-        //            }
-        //        }
-        //    }
-        //    catch
-        //    {
-        //        RemoveTcpClient(webSocket, connectionKey);    // При ошибки тоже удаляем 
-        //    }
-        //}
-        //----------------------------------------------------------------------------------------------------
-        private bool IsTcpClientConnected(TcpClient tcpClient)
-        {
-            try
-            {
-                if (tcpClient == null || !tcpClient.Connected)
-                    return false;
-
-                // Проверяем соединение попыткой чтения/записи
-                var stream = tcpClient.GetStream();
-                return stream.CanRead && stream.CanWrite;
-            }
-            catch
-            {
-                return false;
-            }
         }
         //----------------------------------------------------------------------------------------------------
         private async Task ProcessError(Guid connectionId, DataPacket packet)
