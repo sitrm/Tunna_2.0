@@ -68,9 +68,9 @@ namespace UtilDataPacket
                 if (Data != null && Data.Length > 0)
                     writer.Write(Data);
 
-                //// Контрольная сумма (4 байта)
-                var checksum = ComputeChecksum(ms.ToArray());
-                writer.Write(checksum);
+                ////// Контрольная сумма (4 байта)
+                //var checksum = ComputeChecksum(ms.ToArray());
+                //writer.Write(checksum);
 
                 return ms.ToArray();
             }
@@ -118,14 +118,14 @@ namespace UtilDataPacket
                 if (dataLength > 0)
                     packetData = reader.ReadBytes(dataLength);
 
-                // Чтение и проверка контрольной суммы
-                var storedChecksum = reader.ReadInt32();
-                var dataForChecksum = new byte[data.Length - 4];
-                Buffer.BlockCopy(data, 0, dataForChecksum, 0, dataForChecksum.Length);
-                var calculatedChecksum = ComputeChecksum(dataForChecksum);
+                //// Чтение и проверка контрольной суммы
+                //var storedChecksum = reader.ReadInt32();
+                //var dataForChecksum = new byte[data.Length - 4];
+                //Buffer.BlockCopy(data, 0, dataForChecksum, 0, dataForChecksum.Length);
+                //var calculatedChecksum = ComputeChecksum(dataForChecksum);
 
-                if (storedChecksum != calculatedChecksum)
-                    throw new InvalidDataException("Data corruption detected: checksum mismatch");
+                //if (storedChecksum != calculatedChecksum)
+                //    throw new InvalidDataException("Data corruption detected: checksum mismatch");
 
                 return new DataPacket
                 {
