@@ -17,8 +17,8 @@ namespace TcpToWebSocketProxy
         private readonly int _maxMessageSize;
         private ClientWebSocket _webSocket;
         private readonly object _lock = new object();
+        private ArrayPool<byte> arrayPool = ArrayPool<byte>.Shared;
 
-        
 
         public WebSocketConnection(string url, ClientManager clientManager, int webSocketBufferSize, int maxMessageSize)
         {
@@ -98,7 +98,8 @@ namespace TcpToWebSocketProxy
 
             while (_webSocket?.State == WebSocketState.Open)
             {
-                var buffer = ArrayPool<byte>.Shared.Rent(initialBufferSize); 
+                //var buffer = ArrayPool<byte>.Shared.Rent(initialBufferSize); 
+                var buffer = arrayPool.Rent(initialBufferSize);
                 try
                 {
                     using (var memoryStream = new MemoryStream())
