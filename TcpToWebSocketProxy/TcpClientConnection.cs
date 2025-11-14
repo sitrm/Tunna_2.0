@@ -21,6 +21,7 @@ namespace TcpToWebSocketProxy
         private readonly Guid _id = Guid.NewGuid();
         private ConsoleColor _color;
         private readonly int _bufferSize;
+        private ArrayPool<byte> arrayPool = ArrayPool<byte>.Shared;
 
         //свойства только для чтения 
         public string TargetIp => _targetIp;
@@ -74,7 +75,8 @@ namespace TcpToWebSocketProxy
         //--------------------------------------------------------------------------
         private async Task ReceiveFromTcpAsync(CancellationToken ct)
         {
-            var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
+            //var buffer = ArrayPool<byte>.Shared.Rent(_bufferSize);
+            var buffer = arrayPool.Rent(_bufferSize);
             try
             {
                 while (!ct.IsCancellationRequested && _tcpClient.Connected)
