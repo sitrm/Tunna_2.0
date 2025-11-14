@@ -9,6 +9,7 @@ namespace TcpToWebSocketProxy
         {
             try
             {
+                DrawBanner();
                 Console.WriteLine("TCP to WebSocket Proxy starting...");
                 Console.WriteLine("Loading configuration...");
 
@@ -83,6 +84,24 @@ namespace TcpToWebSocketProxy
                 Console.WriteLine("Press any key to exit...");
                 Console.ReadKey();
             }
+        }
+        private static void DrawBanner()
+        {
+            string banner = @"
+              _____                                ____
+             |_   _|   _ _ __  _ __   __ _        /    \
+               | || | | | '_ \| '_ \ / _` |           /
+               | || |_| | | | | | | | (_| |         /
+               |_| \__,_|_| |_|_| |_|\__,_|______ /_____
+
+               https://github.com/sitrm/Tunna_2";
+
+            Console.Clear();
+            Console.WriteLine(banner);
+            Console.WriteLine("=========================================");
+            Console.WriteLine("      TCP to WebSocket Proxy for IIS v1.0        ");
+            Console.WriteLine("=========================================");
+            Console.WriteLine();
         }
     }
 }
