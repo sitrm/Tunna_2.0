@@ -10,34 +10,32 @@ using System.Threading.Tasks;
 using System.Web;
 using System.Web.WebSockets;
 using Util;
-using System.Buffers;
-using System.Security.Cryptography;
 using System.Collections.Concurrent;
-using System.Web.UI.WebControls;
-using System.Linq;
-
 
 namespace WSP
 {
-
     public partial class WebSocketProxy : System.Web.UI.Page
     {
+        int SIZE_BUF = 65400;
+
         private class ConnectionTarget
         {
             public string Ip { get; set; }
             public int Port { get; set; }
         }
+
         // connectionId → TcpClient
-        private static readonly ConcurrentDictionary<Guid, TcpClient> _tcpClients = new ConcurrentDictionary<Guid, TcpClient>();
+        private static readonly ConcurrentDictionary<Guid, TcpClient> _tcpClients =
+            new ConcurrentDictionary<Guid, TcpClient>();
 
         // connectionId → WebSocket
-        private static readonly ConcurrentDictionary<Guid, WebSocket> _webSockets = new ConcurrentDictionary<Guid, WebSocket>();
+        private static readonly ConcurrentDictionary<Guid, WebSocket> _webSockets =
+            new ConcurrentDictionary<Guid, WebSocket>();
 
         // connectionId → (TargetIp, TargetPort) — для уведомлений
-        private static readonly ConcurrentDictionary<Guid, ConnectionTarget> _connectionTargets = 
+        private static readonly ConcurrentDictionary<Guid, ConnectionTarget> _connectionTargets =
             new ConcurrentDictionary<Guid, ConnectionTarget>();
 
-        int SIZE_BUF = 32000;
         //----------------------------------------------------------------------------------------------------
         protected void Page_Load(object sender, EventArgs e)
         {
@@ -49,21 +47,18 @@ namespace WSP
 
         private async Task ProcessWebSocket(AspNetWebSocketContext context)
         {
-
             WebSocket _webSocket = context.WebSocket;
-           
             Guid connectionId = Guid.NewGuid();
             _webSockets[connectionId] = _webSocket;
 
-            var buffer = ArrayPool<byte>.Shared.Rent(SIZE_BUF);
             try
             {
-
                 while (_webSocket.State == WebSocketState.Open)
                 {
-                    //byte[] buffer = new byte[SIZE_BUF];
                     try
                     {
+                        // Используем стандартный массив вместо ArrayPool
+                        byte[] buffer = new byte[SIZE_BUF];
                         using (var memoryStream = new MemoryStream())
                         {
                             WebSocketReceiveResult result;
@@ -87,11 +82,8 @@ namespace WSP
 
                             if (completeMessage.Length > 0)
                             {
-                                // Десериализуем пакет
                                 DataPacket packet = DataPacket.Deserialize(completeMessage);
-                                //Добавить await (если нужно дождаться завершения):
-                                Task.Run(() => ProcessPacketAsync(_webSocket, packet, connectionId));
-                                //_ = ProcessPacketAsync(_webSocket, packet, connectionId);
+                                await ProcessPacketAsync(_webSocket, packet, connectionId);
                             }
                         }
                     }
@@ -104,26 +96,29 @@ namespace WSP
             }
             finally
             {
+                // Очистка ресурсов
                 WebSocket tempWebSocket = null;
                 TcpClient tcpClient = null;
+                ConnectionTarget conntarget = null;
 
-                ArrayPool<byte>.Shared.Return(buffer);
                 _webSockets.TryRemove(connectionId, out tempWebSocket);
-                // Закрываем TCP-
+
                 if (_tcpClients.TryRemove(connectionId, out tcpClient))
                 {
                     try { tcpClient.Close(); }
                     catch { }
                 }
-                ConnectionTarget conntarget; 
-                // Удаляем цель
+
                 _connectionTargets.TryRemove(connectionId, out conntarget);
-                // Корректно закрываем WebSocket
+
                 if (_webSocket.State == WebSocketState.Open)
                 {
                     try
                     {
-                            _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closed", CancellationToken.None);
+                         _webSocket.CloseAsync(
+                            WebSocketCloseStatus.NormalClosure,
+                            "Closed",
+                            CancellationToken.None);
                     }
                     catch { }
                 }
@@ -137,31 +132,22 @@ namespace WSP
             {
                 switch (packet.Type)
                 {
-
                     case MessageType.Binary:
-                        // Перенаправляем данные на целевой TCP сервер
                         await ForwardToTcpServer(connectionId, packet);
                         break;
 
-                    // case MessageType.Authentication:
-                    //     // Обрабатываем аутентификацию
-                    //     await ProcessAuthentication(webSocket, packet);
-                    //     break;
-
                     case MessageType.Error:
-                        // Обрабатываем ошибки
                         await ProcessError(connectionId, packet);
                         break;
 
                     case MessageType.Disconnect:
-                        // Обрабатываем отключение - закрываем TCP соединение
                         await ProcessDisconnect(connectionId, packet);
                         break;
                 }
             }
             catch (Exception ex)
             {
-                 SendErrorResponse(connectionId, packet, ex);
+                SendErrorResponse(connectionId, packet, ex);
             }
         }
 
@@ -183,61 +169,21 @@ namespace WSP
                 RemoveTcpClient(connectionId);
             }
         }
+
         //---------------------------------------------------------------------------------------------------
-
-        // Функция для чтения данных от TCP 
-        //1111111111111111111
-        //private async Task ReadFromTcpServer(Guid connectionId, TcpClient tcpClient, DataPacket packet)
-        //{
-        //    Guid userId = packet.UserId;
-        //    var stream = tcpClient.GetStream();
-        //    var buffer = ArrayPool<byte>.Shared.Rent(SIZE_BUF);
-        //    var accumulated = new MemoryStream();
-
-        //    try
-        //    {
-        //        WebSocket ws = null;
-        //        ConnectionTarget target = null;
-        //        while (tcpClient.Connected &&
-        //               _webSockets.TryGetValue(connectionId, out ws) &&
-        //               ws.State == WebSocketState.Open &&
-        //               _connectionTargets.TryGetValue(connectionId, out target))
-        //        {
-        //            int bytesRead = 0;
-        //            try
-        //            {
-        //                bytesRead = await stream.ReadAsync(buffer, 0, SIZE_BUF);
-        //            }
-        //            catch
-        //            {
-        //                break; // Ошибка чтения
-        //            }
-
-        //            if (bytesRead == 0) break;
-
-        //            await accumulated.WriteAsync(buffer, 0, bytesRead);
-        //            await SendAccumulatedDataAsync(ws, userId, accumulated, target.Ip, target.Port);
-        //        }
-        //    }
-        //    catch { }
-        //    finally
-        //    {
-        //        ArrayPool<byte>.Shared.Return(buffer);
-        //        accumulated.Dispose();
-        //        RemoveTcpClient(connectionId);
-        //    }
-        //}
-        //22222222222222222222222
         private async Task ReadFromTcpServer(Guid connectionId, TcpClient tcpClient, DataPacket packet)
         {
             Guid userId = packet.UserId;
             var stream = tcpClient.GetStream();
-            var buffer = ArrayPool<byte>.Shared.Rent(SIZE_BUF);
+
+            // Используем стандартный массив вместо ArrayPool
+            byte[] buffer = new byte[SIZE_BUF];
 
             try
             {
                 WebSocket ws = null;
                 ConnectionTarget target = null;
+
                 while (tcpClient.Connected)
                 {
                     int bytesRead;
@@ -258,10 +204,14 @@ namespace WSP
                     if (!_connectionTargets.TryGetValue(connectionId, out target))
                         break;
 
+                    // Копируем данные в новый массив нужного размера
+                    byte[] receivedData = new byte[bytesRead];
+                    Array.Copy(buffer, 0, receivedData, 0, bytesRead);
+
                     var responsePacket = new DataPacket(
                         userId,
                         MessageType.Binary,
-                        new ArraySegment<byte>(buffer, 0, bytesRead).ToArray(),
+                        receivedData,
                         target.Ip,
                         target.Port
                     );
@@ -285,30 +235,10 @@ namespace WSP
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(buffer);
                 RemoveTcpClient(connectionId);
+                // Массив buffer будет автоматически удален сборщиком мусора
             }
         }
-        //private async Task SendAccumulatedDataAsync(WebSocket ws, Guid userId, MemoryStream accumulated,
-        //    string targetIp, int targetPort)
-        //{
-        //    if (accumulated.Length == 0) return;
-
-        //    var data = accumulated.ToArray();
-        //    var responsePacket = new DataPacket(userId, MessageType.Binary, data, targetIp, targetPort);
-        //    var serialized = responsePacket.Serialize();
-
-        //    try
-        //    {
-        //        await ws.SendAsync(new ArraySegment<byte>(serialized), 
-        //                            WebSocketMessageType.Binary, 
-        //                            true, 
-        //                            CancellationToken.None);
-        //    }
-        //    catch { }
-
-        //    accumulated.SetLength(0);
-        //}
 
         //----------------------------------------------------------------------------------------------------
         private TcpClient GetOrCreateTcpClient(Guid connectionId, DataPacket packet)
@@ -319,10 +249,14 @@ namespace WSP
                 try
                 {
                     client.Connect(packet.TargetIp, packet.TargetPort);
-                    // Сохраняем цель для уведомлений 
-                    _connectionTargets[connectionId] = new ConnectionTarget { Ip = packet.TargetIp, Port = packet.TargetPort };
 
-                    // Запускаем **один** читатель
+                    _connectionTargets[connectionId] = new ConnectionTarget
+                    {
+                        Ip = packet.TargetIp,
+                        Port = packet.TargetPort
+                    };
+
+                    // Запускаем читатель
                     Task.Run(async () =>
                     {
                         try
@@ -345,18 +279,20 @@ namespace WSP
                 }
             });
         }
+
         //----------------------------------------------------------------------------------------------------
         private async Task ProcessError(Guid connectionId, DataPacket packet)
         {
             string errorMessage = Encoding.UTF8.GetString(packet.Data);
-            System.Diagnostics.Trace.TraceError("Error from client " + packet.UserId + ": " + errorMessage);
+            //System.Diagnostics.Trace.TraceError($"Error from client {packet.UserId}: {errorMessage}");
         }
+
         //----------------------------------------------------------------------------------------------------
-        // метод для обработки пакетов отключения
         private async Task ProcessDisconnect(Guid connectionId, DataPacket packet)
         {
             RemoveTcpClient(connectionId);
             WebSocket ws = null;
+
             if (_webSockets.TryGetValue(connectionId, out ws) && ws.State == WebSocketState.Open)
             {
                 var response = new DataPacket(
@@ -368,9 +304,14 @@ namespace WSP
                 );
 
                 var data = response.Serialize();
-                await ws.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Binary, true, CancellationToken.None);
+                await ws.SendAsync(
+                    new ArraySegment<byte>(data),
+                    WebSocketMessageType.Binary,
+                    true,
+                    CancellationToken.None);
             }
         }
+
         //-----------------------------------------------------------------------------------------------------
         private async Task SendErrorResponse(Guid connectionId, DataPacket packet, Exception ex)
         {
@@ -389,12 +330,16 @@ namespace WSP
             var data = errorPacket.Serialize();
             try
             {
-                await ws.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Binary, true, CancellationToken.None);
+                await ws.SendAsync(
+                    new ArraySegment<byte>(data),
+                    WebSocketMessageType.Binary,
+                    true,
+                    CancellationToken.None);
             }
             catch { }
         }
+
         //----------------------------------------------------------------------------------------------------
-        // Метод для отправки уведомления о разрыве TCP соединения
         private async Task SendTcpDisconnectNotification(WebSocket ws, string ip, int port)
         {
             try
@@ -402,16 +347,21 @@ namespace WSP
                 var packet = new DataPacket(
                     Guid.Empty,
                     MessageType.Disconnect,
-                    Encoding.UTF8.GetBytes("TCP connection closed:" + ip + ":" + port),
+                    Encoding.UTF8.GetBytes("TCP connection closed:"),
                     ip,
                     port
                 );
 
                 var data = packet.Serialize();
-                await ws.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Binary, true, CancellationToken.None);
+                await ws.SendAsync(
+                    new ArraySegment<byte>(data),
+                    WebSocketMessageType.Binary,
+                    true,
+                    CancellationToken.None);
             }
             catch { }
         }
+
         //-----------------------------------------------------------------------
         private void RemoveTcpClient(Guid connectionId)
         {
@@ -424,19 +374,21 @@ namespace WSP
                 try { tcpClient.Close(); }
                 catch { }
             }
+
             if (_connectionTargets.TryGetValue(connectionId, out conntarget) &&
                 _webSockets.TryGetValue(connectionId, out ws) &&
                 ws.State == WebSocketState.Open)
             {
-                SendTcpDisconnectNotification(ws, conntarget.Ip, conntarget.Port);
+                Task.Run(async () =>
+                    await SendTcpDisconnectNotification(ws, conntarget.Ip, conntarget.Port));
             }
 
             _connectionTargets.TryRemove(connectionId, out conntarget);
         }
+
         //-----------------------------------------------------------------------
         private async Task CleanupWebSocketResources(WebSocket webSocket)
         {
-            // Закрываем все TCP соединения для этого WebSocket
             foreach (var connectionKey in _tcpClients.Keys)
             {
                 RemoveTcpClient(connectionKey);
@@ -451,18 +403,12 @@ namespace WSP
                         "Connection closed",
                         CancellationToken.None);
                 }
-                catch
-                {
-                    // Игнорируем ошибки закрытия
-                }
+                catch { }
             }
         }
-
     }
 }
 
-//****************************************************************************************************************
-//****************************************************************************************************************
 //****************************************************************************************************************
 
 namespace Util
@@ -476,127 +422,84 @@ namespace Util
         Disconnect = 5
     }
 
-    /// <summary>
-    /// Класс для сериализации/десериализации пакетов данных
-    /// </summary>
     [Serializable]
     public class DataPacket
     {
-        private const uint MAGIC_NUMBER = 0xDEADBEEF; //(4 байта)
+        private const uint MAGIC_NUMBER = 0xDEADBEEF;
+
         public Guid UserId { get; set; }
         public MessageType Type { get; set; }
         public byte[] Data { get; set; }
         public string TargetIp { get; set; }
         public int TargetPort { get; set; }
 
-        public DataPacket()
-        {
+        public DataPacket() { }
 
+        public DataPacket(Guid userId, MessageType type, byte[] data, string targetIp, int targetPort)
+        {
+            UserId = userId;
+            Type = type;
+            Data = data;
+            TargetIp = targetIp;
+            TargetPort = targetPort;
         }
 
-        public DataPacket(Guid userId, MessageType type, byte[] data, string targetIp, int targetPort) : this()
-        {
-            UserId = userId;    // 16 
-            Type = type;        // 4
-            Data = data;        // N
-            TargetIp = targetIp;   // 4
-            TargetPort = targetPort;   // N
-        }
-
-        public DataPacket(Guid userId, MessageType type, string text, string targetIp, int targetPort) : this(userId, type, Encoding.UTF8.GetBytes(text), targetIp, targetPort)
+        public DataPacket(Guid userId, MessageType type, string text, string targetIp, int targetPort)
+            : this(userId, type, Encoding.UTF8.GetBytes(text), targetIp, targetPort)
         {
         }
 
-        /// <summary>
-        /// Сериализация пакета в массив байт
-        /// </summary>
         public byte[] Serialize()
         {
             using (var ms = new MemoryStream())
             using (var writer = new BinaryWriter(ms))
             {
-                //Заголовок пакета(4 байта)
-                writer.Write(MAGIC_NUMBER); // Magic number для идентификации пакета 
-
-                // UserId (16 байт)
+                writer.Write(MAGIC_NUMBER);
                 writer.Write(UserId.ToByteArray());
-
-                // Тип сообщения (4 байта)
                 writer.Write((int)Type);
 
-                // TargetIp (длина(4 байта и данные)
                 writer.Write(TargetIp != null ? TargetIp.Length : 0);
                 if (!string.IsNullOrEmpty(TargetIp))
                     writer.Write(Encoding.UTF8.GetBytes(TargetIp));
 
-                // TargetPort (4 байта)
                 writer.Write(TargetPort);
-
-                // Длина данных (4 байта)
                 writer.Write(Data != null ? Data.Length : 0);
 
-                // Данные (переменная длина)
                 if (Data != null && Data.Length > 0)
                     writer.Write(Data);
-
-                ////// Контрольная сумма (4 байта)
-                //var checksum = ComputeChecksum(ms.ToArray());
-                //writer.Write(checksum);
 
                 return ms.ToArray();
             }
         }
 
-        /// <summary>
-        /// Десериализация пакета из массива байт
-        /// </summary>
         public static DataPacket Deserialize(byte[] data)
         {
             if (data == null || data.Length < 36)
-                // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 4(ipLen) + 4(port) + 4(dataLen) + 4(checksum)
                 throw new InvalidDataException("Packet too short or null");
 
             using (var ms = new MemoryStream(data))
             using (var reader = new BinaryReader(ms))
             {
-                // Проверка magic number
                 var magic = reader.ReadUInt32();
                 if (magic != MAGIC_NUMBER)
                     throw new InvalidDataException("Invalid packet format");
 
-                // Чтение UserId
                 var guidBytes = reader.ReadBytes(16);
                 var userId = new Guid(guidBytes);
 
-                // Чтение типа сообщения
                 var type = (MessageType)reader.ReadInt32();
 
-                // Чтение длинны TargetIp 
                 var ipLength = reader.ReadInt32();
-                // чтение TargetIp N байт 
                 string targetIp = null;
                 if (ipLength > 0)
                     targetIp = Encoding.UTF8.GetString(reader.ReadBytes(ipLength));
 
-                // Чтение TargetPort 4 
                 var targetPort = reader.ReadInt32();
 
-                // Чтение длины данных
                 var dataLength = reader.ReadInt32();
-
-                // Чтение данных
                 byte[] packetData = null;
                 if (dataLength > 0)
                     packetData = reader.ReadBytes(dataLength);
-
-                //// Чтение и проверка контрольной суммы
-                //var storedChecksum = reader.ReadInt32();
-                //var dataForChecksum = new byte[data.Length - 4];
-                //Buffer.BlockCopy(data, 0, dataForChecksum, 0, dataForChecksum.Length);
-                //var calculatedChecksum = ComputeChecksum(dataForChecksum);
-
-                //if (storedChecksum != calculatedChecksum)
-                //    throw new InvalidDataException("Data corruption detected: checksum mismatch");
 
                 return new DataPacket
                 {
@@ -609,32 +512,9 @@ namespace Util
             }
         }
 
-        ///// <summary>
-        ///// Вычисление контрольной суммы
-        ///// </summary>
-        //private static int ComputeChecksum(byte[] data, int offset, int count)
-        //{
-        //    using (var md5 = MD5.Create())
-        //    {
-        //        var hash = md5.ComputeHash(data, offset, count);
-        //        return BitConverter.ToInt32(hash, 0);
-        //    }
-        //}
-
-        /// <summary>
-        /// Получение данных как строки
-        /// </summary>
         public string GetDataAsString()
         {
             return Data != null ? Encoding.UTF8.GetString(Data) : null;
-        }
-        private static int ComputeChecksum(byte[] data)
-        {
-            using (var md5 = MD5.Create())
-            {
-                var hash = md5.ComputeHash(data);
-                return BitConverter.ToInt32(hash, 0);
-            }
         }
     }
 }
