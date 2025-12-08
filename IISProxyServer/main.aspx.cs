@@ -23,18 +23,20 @@ namespace WSP
             public string Ip { get; set; }
             public int Port { get; set; }
         }
+        private class ClientConnection
+        {
+            public WebSocket WebSocket { get; set; }
+            public TcpClient TcpClient { get; set; }
+            public ConnectionTarget Target { get; set; }
+            public Task ReadingTask { get; set; }
+        }
+        // clientId (packet.UserId) → ClientConnection
+        private static readonly ConcurrentDictionary<Guid, ClientConnection> _clients =
+            new ConcurrentDictionary<Guid, ClientConnection>();
 
-        // connectionId → TcpClient
-        private static readonly ConcurrentDictionary<Guid, TcpClient> _tcpClients =
-            new ConcurrentDictionary<Guid, TcpClient>();
-
-        // connectionId → WebSocket
-        private static readonly ConcurrentDictionary<Guid, WebSocket> _webSockets =
-            new ConcurrentDictionary<Guid, WebSocket>();
-
-        // connectionId → (TargetIp, TargetPort) — для уведомлений
-        private static readonly ConcurrentDictionary<Guid, ConnectionTarget> _connectionTargets =
-            new ConcurrentDictionary<Guid, ConnectionTarget>();
+        // WebSocket → List<clientId> (для очистки при отключении)
+        private static readonly ConcurrentDictionary<WebSocket, List<Guid>> _webSocketClients =
+            new ConcurrentDictionary<WebSocket, List<Guid>>();
 
         //----------------------------------------------------------------------------------------------------
         protected void Page_Load(object sender, EventArgs e)
@@ -47,13 +49,13 @@ namespace WSP
 
         private async Task ProcessWebSocket(AspNetWebSocketContext context)
         {
-            WebSocket _webSocket = context.WebSocket;
-            Guid connectionId = Guid.NewGuid();
-            _webSockets[connectionId] = _webSocket;
+            WebSocket webSocket = context.WebSocket;
+            List<Guid> clientIdsForThisSocket = new List<Guid>();
+            _webSocketClients[webSocket] = clientIdsForThisSocket;
 
             try
             {
-                while (_webSocket.State == WebSocketState.Open)
+                while (webSocket.State == WebSocketState.Open)
                 {
                     try
                     {
@@ -64,7 +66,7 @@ namespace WSP
                             WebSocketReceiveResult result;
                             do
                             {
-                                result = await _webSocket.ReceiveAsync(
+                                result = await webSocket.ReceiveAsync(
                                     new ArraySegment<byte>(buffer),
                                     CancellationToken.None);
 
@@ -73,17 +75,17 @@ namespace WSP
 
                                 memoryStream.Write(buffer, 0, result.Count);
                             }
-                            while (!result.EndOfMessage && _webSocket.State == WebSocketState.Open);
+                            while (!result.EndOfMessage && webSocket.State == WebSocketState.Open);
 
                             if (result.MessageType == WebSocketMessageType.Close)
                                 break;
 
-                            var completeMessage = memoryStream.ToArray();
+                            byte[] completeMessage = memoryStream.ToArray();
 
                             if (completeMessage.Length > 0)
                             {
                                 DataPacket packet = DataPacket.Deserialize(completeMessage);
-                                await ProcessPacketAsync(_webSocket, packet, connectionId);
+                                await ProcessPacketAsync(webSocket, packet, clientIdsForThisSocket);
                             }
                         }
                     }
@@ -96,95 +98,82 @@ namespace WSP
             }
             finally
             {
-                // Очистка ресурсов
-                WebSocket tempWebSocket = null;
-                TcpClient tcpClient = null;
-                ConnectionTarget conntarget = null;
+                // Очистка всех клиентов для этого WebSocket
+                CleanupWebSocketClients(webSocket, clientIdsForThisSocket);
 
-                _webSockets.TryRemove(connectionId, out tempWebSocket);
-
-                if (_tcpClients.TryRemove(connectionId, out tcpClient))
-                {
-                    try { tcpClient.Close(); }
-                    catch { }
-                }
-
-                _connectionTargets.TryRemove(connectionId, out conntarget);
-
-                if (_webSocket.State == WebSocketState.Open)
+                if (webSocket.State == WebSocketState.Open)
                 {
                     try
                     {
-                         _webSocket.CloseAsync(
+                        webSocket.CloseAsync(
                             WebSocketCloseStatus.NormalClosure,
                             "Closed",
                             CancellationToken.None);
                     }
                     catch { }
                 }
+
+                List<Guid> removedList;
+                _webSocketClients.TryRemove(webSocket, out removedList);
             }
         }
 
         //----------------------------------------------------------------------------------------------------
-        private async Task ProcessPacketAsync(WebSocket webSocket, DataPacket packet, Guid connectionId)
+        private async Task ProcessPacketAsync(WebSocket webSocket, DataPacket packet, List<Guid> clientIdsForThisSocket)
         {
             try
             {
                 switch (packet.Type)
                 {
                     case MessageType.Binary:
-                        await ForwardToTcpServer(connectionId, packet);
+                        await ForwardToTcpServer(webSocket, packet, clientIdsForThisSocket);
                         break;
 
                     case MessageType.Error:
-                        await ProcessError(connectionId, packet);
+                        await ProcessError(webSocket, packet);
                         break;
 
                     case MessageType.Disconnect:
-                        await ProcessDisconnect(connectionId, packet);
+                        await ProcessDisconnect(packet.UserId);
                         break;
                 }
             }
             catch (Exception ex)
             {
-                SendErrorResponse(connectionId, packet, ex);
+                SendErrorResponse(webSocket, packet, ex);
             }
         }
 
         //---------------------------------------------------------------------------------------------------
-        private async Task ForwardToTcpServer(Guid connectionId, DataPacket packet)
+        private async Task ForwardToTcpServer(WebSocket webSocket, DataPacket packet, List<Guid> clientIdsForThisSocket)
         {
-            var tcpClient = GetOrCreateTcpClient(connectionId, packet);
-            if (tcpClient == null) return;
+            ClientConnection clientConn = GetOrCreateClientConnection(webSocket, packet, clientIdsForThisSocket);
+            if (clientConn == null || clientConn.TcpClient == null) return;
 
             try
             {
-                var stream = tcpClient.GetStream();
+                NetworkStream stream = clientConn.TcpClient.GetStream();
                 await stream.WriteAsync(packet.Data, 0, packet.Data.Length);
                 await stream.FlushAsync();
             }
             catch (Exception ex)
             {
-                SendErrorResponse(connectionId, packet, ex);
-                RemoveTcpClient(connectionId);
+                SendErrorResponse(webSocket, packet, ex);
+                RemoveClient(packet.UserId);
             }
         }
 
         //---------------------------------------------------------------------------------------------------
-        private async Task ReadFromTcpServer(Guid connectionId, TcpClient tcpClient, DataPacket packet)
+        private async Task ReadFromTcpServer(Guid clientId, TcpClient tcpClient, WebSocket webSocket, ConnectionTarget target)
         {
-            Guid userId = packet.UserId;
-            var stream = tcpClient.GetStream();
+            NetworkStream stream = tcpClient.GetStream();
 
             // Используем стандартный массив вместо ArrayPool
             byte[] buffer = new byte[SIZE_BUF];
 
             try
             {
-                WebSocket ws = null;
-                ConnectionTarget target = null;
-
-                while (tcpClient.Connected)
+                while (tcpClient.Connected && webSocket.State == WebSocketState.Open)
                 {
                     int bytesRead;
                     try
@@ -198,29 +187,23 @@ namespace WSP
 
                     if (bytesRead == 0) break;
 
-                    if (!_webSockets.TryGetValue(connectionId, out ws) || ws.State != WebSocketState.Open)
-                        break;
-
-                    if (!_connectionTargets.TryGetValue(connectionId, out target))
-                        break;
-
-                    // Копируем данные в новый массив нужного размера
+                    // Копируем данные
                     byte[] receivedData = new byte[bytesRead];
                     Array.Copy(buffer, 0, receivedData, 0, bytesRead);
 
-                    var responsePacket = new DataPacket(
-                        userId,
+                    DataPacket responsePacket = new DataPacket(
+                        clientId,
                         MessageType.Binary,
                         receivedData,
                         target.Ip,
                         target.Port
                     );
 
-                    var serialized = responsePacket.Serialize();
+                    byte[] serialized = responsePacket.Serialize();
 
                     try
                     {
-                        await ws.SendAsync(
+                        await webSocket.SendAsync(
                             new ArraySegment<byte>(serialized),
                             WebSocketMessageType.Binary,
                             true,
@@ -235,91 +218,112 @@ namespace WSP
             }
             finally
             {
-                RemoveTcpClient(connectionId);
-                // Массив buffer будет автоматически удален сборщиком мусора
+                RemoveClient(clientId);
             }
         }
 
         //----------------------------------------------------------------------------------------------------
-        private TcpClient GetOrCreateTcpClient(Guid connectionId, DataPacket packet)
+        private ClientConnection GetOrCreateClientConnection(WebSocket webSocket, DataPacket packet, List<Guid> clientIdsForThisSocket)
         {
-            return _tcpClients.GetOrAdd(connectionId, _ =>
+            Guid clientId = packet.UserId;
+            return _clients.GetOrAdd(clientId, (Func<Guid, ClientConnection>)(_ =>
             {
-                var client = new TcpClient();
+                TcpClient client = new TcpClient();
                 try
                 {
                     client.Connect(packet.TargetIp, packet.TargetPort);
 
-                    _connectionTargets[connectionId] = new ConnectionTarget
+                    ConnectionTarget target = new ConnectionTarget
                     {
                         Ip = packet.TargetIp,
                         Port = packet.TargetPort
                     };
+                    // Создаем объект подключения
+                    ClientConnection clientConn = new ClientConnection
+                    {
+                        WebSocket = webSocket,
+                        TcpClient = client,
+                        Target = target
+                    };
 
-                    // Запускаем читатель
-                    Task.Run(async () =>
+                    // Запускаем задачу чтения из TCP
+                    clientConn.ReadingTask = Task.Run(async () =>
                     {
                         try
                         {
-                            await ReadFromTcpServer(connectionId, client, packet);
+                            await ReadFromTcpServer(clientId, client, webSocket, target);
                         }
                         finally
                         {
-                            RemoveTcpClient(connectionId);
+                            RemoveClient(clientId);
                         }
                     });
 
-                    return client;
+                    // Добавляем clientId в список для этого WebSocket
+                    lock (clientIdsForThisSocket)
+                    {
+                        clientIdsForThisSocket.Add(clientId);
+                    }
+
+                    return clientConn;
                 }
                 catch
                 {
-                    TcpClient tcpClient = null;
-                    _tcpClients.TryRemove(connectionId, out tcpClient);
+                    // При ошибке удаляем из словарей
+                    ClientConnection removedClient;
+                    _clients.TryRemove(clientId, out removedClient);
+                    client.Close();
                     throw;
                 }
-            });
+            }));
         }
 
         //----------------------------------------------------------------------------------------------------
-        private async Task ProcessError(Guid connectionId, DataPacket packet)
+        private async Task ProcessError(WebSocket webSocket, DataPacket packet)
         {
             string errorMessage = Encoding.UTF8.GetString(packet.Data);
-            //System.Diagnostics.Trace.TraceError($"Error from client {packet.UserId}: {errorMessage}");
+            System.Diagnostics.Trace.TraceError("Error from client " + packet.UserId + ": " + errorMessage);
         }
 
         //----------------------------------------------------------------------------------------------------
-        private async Task ProcessDisconnect(Guid connectionId, DataPacket packet)
+        private async Task ProcessDisconnect(Guid clientId)
         {
-            RemoveTcpClient(connectionId);
-            WebSocket ws = null;
-
-            if (_webSockets.TryGetValue(connectionId, out ws) && ws.State == WebSocketState.Open)
+            RemoveClient(clientId);
+            // Отправляем подтверждение отключения
+            ClientConnection clientConn;
+            if (_clients.TryGetValue(clientId, out clientConn))
             {
-                var response = new DataPacket(
-                    packet.UserId,
-                    MessageType.Disconnect,
-                    Encoding.UTF8.GetBytes("TCP connection closed successfully!!!"),
-                    packet.TargetIp,
-                    packet.TargetPort
-                );
+                if (clientConn.WebSocket != null && clientConn.WebSocket.State == WebSocketState.Open)
+                {
+                    DataPacket response = new DataPacket(
+                        clientId,
+                        MessageType.Disconnect,
+                        Encoding.UTF8.GetBytes("TCP connection closed successfully!!!"),
+                        clientConn.Target.Ip,
+                        clientConn.Target.Port
+                    );
 
-                var data = response.Serialize();
-                await ws.SendAsync(
-                    new ArraySegment<byte>(data),
-                    WebSocketMessageType.Binary,
-                    true,
-                    CancellationToken.None);
+                    byte[] data = response.Serialize();
+                    try
+                    {
+                        await clientConn.WebSocket.SendAsync(
+                            new ArraySegment<byte>(data),
+                            WebSocketMessageType.Binary,
+                            true,
+                            CancellationToken.None);
+                    }
+                    catch { }
+                }
             }
         }
 
         //-----------------------------------------------------------------------------------------------------
-        private async Task SendErrorResponse(Guid connectionId, DataPacket packet, Exception ex)
+        private async Task SendErrorResponse(WebSocket webSocket, DataPacket packet, Exception ex)
         {
-            WebSocket ws = null;
-            if (!_webSockets.TryGetValue(connectionId, out ws) || ws.State != WebSocketState.Open)
+            if (webSocket.State != WebSocketState.Open)
                 return;
 
-            var errorPacket = new DataPacket(
+            DataPacket errorPacket = new DataPacket(
                 packet.UserId,
                 MessageType.Error,
                 Encoding.UTF8.GetBytes("Error: " + ex.Message),
@@ -327,10 +331,10 @@ namespace WSP
                 packet.TargetPort
             );
 
-            var data = errorPacket.Serialize();
+            byte[] data = errorPacket.Serialize();
             try
             {
-                await ws.SendAsync(
+                await webSocket.SendAsync(
                     new ArraySegment<byte>(data),
                     WebSocketMessageType.Binary,
                     true,
@@ -340,20 +344,27 @@ namespace WSP
         }
 
         //----------------------------------------------------------------------------------------------------
-        private async Task SendTcpDisconnectNotification(WebSocket ws, string ip, int port)
+        private async Task SendTcpDisconnectNotification(Guid clientId)
         {
+            ClientConnection clientConn;
+            if (!_clients.TryGetValue(clientId, out clientConn))
+                return;
+
+            if (clientConn.WebSocket == null || clientConn.WebSocket.State != WebSocketState.Open)
+                return;
+
             try
             {
-                var packet = new DataPacket(
-                    Guid.Empty,
+                DataPacket packet = new DataPacket(
+                    clientId,
                     MessageType.Disconnect,
-                    Encoding.UTF8.GetBytes("TCP connection closed:"),
-                    ip,
-                    port
+                    Encoding.UTF8.GetBytes("TCP connection closed"),
+                    clientConn.Target.Ip,
+                    clientConn.Target.Port
                 );
 
-                var data = packet.Serialize();
-                await ws.SendAsync(
+                byte[] data = packet.Serialize();
+                await clientConn.WebSocket.SendAsync(
                     new ArraySegment<byte>(data),
                     WebSocketMessageType.Binary,
                     true,
@@ -363,47 +374,34 @@ namespace WSP
         }
 
         //-----------------------------------------------------------------------
-        private void RemoveTcpClient(Guid connectionId)
+        private void RemoveClient(Guid clientId)
         {
-            TcpClient tcpClient = null;
-            WebSocket ws = null;
-            ConnectionTarget conntarget = null;
-
-            if (_tcpClients.TryRemove(connectionId, out tcpClient))
-            {
-                try { tcpClient.Close(); }
-                catch { }
-            }
-
-            if (_connectionTargets.TryGetValue(connectionId, out conntarget) &&
-                _webSockets.TryGetValue(connectionId, out ws) &&
-                ws.State == WebSocketState.Open)
-            {
-                Task.Run(async () =>
-                    await SendTcpDisconnectNotification(ws, conntarget.Ip, conntarget.Port));
-            }
-
-            _connectionTargets.TryRemove(connectionId, out conntarget);
-        }
-
-        //-----------------------------------------------------------------------
-        private async Task CleanupWebSocketResources(WebSocket webSocket)
-        {
-            foreach (var connectionKey in _tcpClients.Keys)
-            {
-                RemoveTcpClient(connectionKey);
-            }
-
-            if (webSocket.State == WebSocketState.Open)
+            ClientConnection clientConn;
+            if (_clients.TryRemove(clientId, out clientConn))
             {
                 try
                 {
-                    await webSocket.CloseAsync(
-                        WebSocketCloseStatus.NormalClosure,
-                        "Connection closed",
-                        CancellationToken.None);
+                    if (clientConn.TcpClient != null)
+                        clientConn.TcpClient.Close();
                 }
                 catch { }
+
+                // Отправляем уведомление об отключении
+                Task.Run(async () => await SendTcpDisconnectNotification(clientId));
+            }
+        }
+
+        //-----------------------------------------------------------------------
+        private async Task CleanupWebSocketClients(WebSocket webSocket, List<Guid> clientIds)
+        {
+            // Удаляем всех клиентов для этого WebSocket
+            lock (clientIds)
+            {
+                foreach (Guid clientId in clientIds)
+                {
+                    RemoveClient(clientId);
+                }
+                clientIds.Clear();
             }
         }
     }
@@ -518,3 +516,4 @@ namespace Util
         }
     }
 }
+
