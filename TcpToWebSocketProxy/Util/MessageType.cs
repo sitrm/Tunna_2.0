@@ -15,4 +15,13 @@ namespace UtilDataPacket
         Disconnect = 5
         // close !!! когда от iis приходит пакет чтобы закрыть соединение в случае чего либо 80 стр 
     }
+    /// <summary>
+    /// Тип IP-адреса
+    /// </summary>
+    public enum IpAddressType : byte
+    {
+        None = 0,
+        IPv4 = 1,
+        IPv6 = 2
+    }
 }

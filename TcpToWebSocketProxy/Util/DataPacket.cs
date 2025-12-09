@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Sockets;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -8,6 +10,20 @@ using System.Threading.Tasks;
 namespace UtilDataPacket
 {
 
+    /// <summary>
+    /// Вспомогательный класс для хранения результата парсинга IP-адреса
+    /// </summary>
+    internal class IpParseResult
+    {
+        public IpAddressType Type { get; set; }
+        public byte[] Bytes { get; set; }
+
+        public IpParseResult(IpAddressType type, byte[] bytes)
+        {
+            Type = type;
+            Bytes = bytes;
+        }
+    }
     /// <summary>
     /// Класс для сериализации/десериализации пакетов данных
     /// </summary>
@@ -36,6 +52,49 @@ namespace UtilDataPacket
         public DataPacket(Guid userId, MessageType type, string text, string targetIp, int targetPort) : this(userId, type, Encoding.UTF8.GetBytes(text), targetIp, targetPort)
         {
         }
+
+        // <summary>
+        /// Определяет тип IP-адреса и преобразует его в массив байт
+        /// </summary>
+        private IpParseResult ParseIpAddress(string ip)
+        {
+            if (string.IsNullOrEmpty(ip))
+                return new IpParseResult(IpAddressType.None, new byte[0]);
+            IPAddress address = null;
+            if (IPAddress.TryParse(ip, out address))
+            {
+                if (address.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    // IPv4 - 4 байта
+                    return new IpParseResult(IpAddressType.IPv4, address.GetAddressBytes());
+                }
+                else if (address.AddressFamily == AddressFamily.InterNetworkV6)
+                {
+                    // IPv6 - 16 байт
+                    return new IpParseResult(IpAddressType.IPv6, address.GetAddressBytes());
+                }
+            }
+
+            throw new ArgumentException("Invalid IP address format:" + ip);
+        }
+        /// <summary>
+        /// Преобразует массив байт обратно в строку IP-адреса
+        /// </summary>
+        private string BytesToIpAddress(IpAddressType ipType, byte[] bytes)
+        {
+            if (ipType == IpAddressType.None || bytes == null || bytes.Length == 0)
+                return null;
+
+            try
+            {
+                IPAddress address = new IPAddress(bytes);
+                return address.ToString();
+            }
+            catch
+            {
+                return null;
+            }
+        }
         /// <summary>
         /// Сериализация пакета в массив байт
         /// </summary>
@@ -53,24 +112,24 @@ namespace UtilDataPacket
                 // Тип сообщения (4 байта)
                 writer.Write((int)Type);
 
-                // TargetIp (длина(4 байта и данные)
-                writer.Write(TargetIp?.Length ?? 0);
-                if (!string.IsNullOrEmpty(TargetIp))
-                    writer.Write(Encoding.UTF8.GetBytes(TargetIp));
+                // Тип IP-адреса (1 байт)
+                var IpParseResult = ParseIpAddress(TargetIp);
 
+                writer.Write((byte)IpParseResult.Type); // 1
+                // IP-адрес (4 байта для IPv4 или 16 байт для IPv6)
+                if (IpParseResult.Type != IpAddressType.None && IpParseResult.Bytes.Length > 0)
+                {
+                    writer.Write(IpParseResult.Bytes);
+                }
                 // TargetPort (4 байта)
                 writer.Write(TargetPort);
 
                 // Длина данных (4 байта)
-                writer.Write(Data?.Length ?? 0);
+                writer.Write(Data != null ? Data.Length : 0);
 
                 // Данные (переменная длина)
                 if (Data != null && Data.Length > 0)
                     writer.Write(Data);
-
-                ////// Контрольная сумма (4 байта)
-                //var checksum = ComputeChecksum(ms.ToArray());
-                //writer.Write(checksum);
 
                 return ms.ToArray();
             }
@@ -81,8 +140,8 @@ namespace UtilDataPacket
         /// </summary>
         public static DataPacket Deserialize(byte[] data)
         {
-            if (data == null || data.Length < 36) 
-            // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 4(ipLen) + 4(port) + 4(dataLen) + 4(checksum)
+            if (data == null || data.Length < 33)
+                // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 1(ipver) + 4(port) + 4(dataLen) + 4(checksum)
                 throw new InvalidDataException("Packet too short or null");
 
             using (var ms = new MemoryStream(data))
@@ -100,13 +159,30 @@ namespace UtilDataPacket
                 // Чтение типа сообщения
                 var type = (MessageType)reader.ReadInt32();
 
-                // Чтение длинны TargetIp 
-                var ipLength = reader.ReadInt32();
-                // чтение TargetIp N байт 
+                // Чтение типа IP-адреса
+                var ipType = (IpAddressType)reader.ReadByte();
+                // Чтение IP-адреса в зависимости от типа
                 string targetIp = null;
-                if (ipLength > 0 || ipLength < 1024)
-                    targetIp = Encoding.UTF8.GetString(reader.ReadBytes(ipLength));
+                byte[] ipBytes = null;
 
+                switch (ipType)
+                {
+                    case IpAddressType.IPv4:
+                        ipBytes = reader.ReadBytes(4); // 4 байта для IPv4
+                        break;
+                    case IpAddressType.IPv6:
+                        ipBytes = reader.ReadBytes(16); // 16 байт для IPv6
+                        break;
+                    case IpAddressType.None:
+                        // Нет IP-адреса
+                        break;
+                    default:
+                        throw new InvalidDataException("Unknown IP address type:" + ipType);
+                }
+                if (ipBytes != null && ipBytes.Length > 0)
+                {
+                    targetIp = new IPAddress(ipBytes).ToString();
+                }
                 // Чтение TargetPort 4 
                 var targetPort = reader.ReadInt32();
 
@@ -117,15 +193,6 @@ namespace UtilDataPacket
                 byte[] packetData = null;
                 if (dataLength > 0)
                     packetData = reader.ReadBytes(dataLength);
-
-                //// Чтение и проверка контрольной суммы
-                //var storedChecksum = reader.ReadInt32();
-                //var dataForChecksum = new byte[data.Length - 4];
-                //Buffer.BlockCopy(data, 0, dataForChecksum, 0, dataForChecksum.Length);
-                //var calculatedChecksum = ComputeChecksum(dataForChecksum);
-
-                //if (storedChecksum != calculatedChecksum)
-                //    throw new InvalidDataException("Data corruption detected: checksum mismatch");
 
                 return new DataPacket
                 {
@@ -143,17 +210,6 @@ namespace UtilDataPacket
         public string GetDataAsString()
         {
             return Data != null ? Encoding.UTF8.GetString(Data) : null;
-        }
-        /// <summary>
-        /// Вычисление контрольной суммы с использованием MD5
-        /// </summary>
-        private static int ComputeChecksum(byte[] data)
-        {
-            using (var md5 = MD5.Create())
-            {
-                var hash = md5.ComputeHash(data);
-                return BitConverter.ToInt32(hash, 0);
-            }
         }
     }
 }
