@@ -11,6 +11,8 @@ using System.Web;
 using UtilDataPacket;
 using System.Web.WebSockets;
 using System.Collections.Concurrent;
+using System.Linq;
+using System.Security.Cryptography;
 
 namespace WSP
 {
@@ -523,6 +525,8 @@ namespace UtilDataPacket
     {
 
         private const uint MAGIC_NUMBER = 0xDEADBEEF; //(4 байта)
+        private const string EncryptionKeyBase64 = "hVgR/6pAo0PfrxGX2YeliYg+6TS//N/xGaxzwoMPmxk="; // 256-bit ключ
+        private static readonly byte[] EncryptionKey = Convert.FromBase64String(EncryptionKeyBase64);
 
         public Guid UserId { get; set; }
         public MessageType Type { get; set; }
@@ -564,7 +568,7 @@ namespace UtilDataPacket
                     // IPv6 - 16 байт
                     return new IpParseResult(IpAddressType.IPv6, address.GetAddressBytes());
                 }
-            }            
+            }
 
             throw new ArgumentException("Invalid IP address format:" + ip);
         }
@@ -605,7 +609,7 @@ namespace UtilDataPacket
 
                 // Тип IP-адреса (1 байт)
                 var IpParseResult = ParseIpAddress(TargetIp);
-                
+
                 writer.Write((byte)IpParseResult.Type); // 1
                 // IP-адрес (4 байта для IPv4 или 16 байт для IPv6)
                 if (IpParseResult.Type != IpAddressType.None && IpParseResult.Bytes.Length > 0)
@@ -622,7 +626,8 @@ namespace UtilDataPacket
                 if (Data != null && Data.Length > 0)
                     writer.Write(Data);
 
-                return ms.ToArray();
+                var plainPacket = ms.ToArray();
+                return EncryptPacket(plainPacket);
             }
         }
 
@@ -635,7 +640,9 @@ namespace UtilDataPacket
                 // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 1(ipver) + 4(port) + 4(dataLen) + 4(checksum)
                 throw new InvalidDataException("Packet too short or null");
 
-            using (var ms = new MemoryStream(data))
+            var decrypted = DecryptPacket(data);
+
+            using (var ms = new MemoryStream(decrypted))
             using (var reader = new BinaryReader(ms))
             {
                 // Проверка magic number
@@ -701,6 +708,101 @@ namespace UtilDataPacket
         public string GetDataAsString()
         {
             return Data != null ? Encoding.UTF8.GetString(Data) : null;
+        }
+
+        /// <summary>
+        /// Шифрует пакет целиком (AES-256 CBC + HMAC-SHA256)
+        /// Формат: [1 байт длина IV][IV][cipher][HMAC(32)]
+        /// </summary>
+        private static byte[] EncryptPacket(byte[] plainPacket)
+        {
+            if (plainPacket == null) throw new ArgumentNullException("plainPacket");
+
+            using (var aes = Aes.Create())
+            using (var hmac = new HMACSHA256(EncryptionKey))
+            {
+                aes.Key = EncryptionKey;
+                aes.Mode = CipherMode.CBC;
+                aes.Padding = PaddingMode.PKCS7;
+                aes.GenerateIV();
+
+                using (var encryptor = aes.CreateEncryptor())
+                {
+                    byte[] cipher = encryptor.TransformFinalBlock(plainPacket, 0, plainPacket.Length);
+                    byte[] iv = aes.IV;
+
+                    byte[] hmacData = Combine(iv, cipher);
+                    byte[] tag = hmac.ComputeHash(hmacData);
+
+                    byte[] result = new byte[1 + iv.Length + cipher.Length + tag.Length];
+                    result[0] = (byte)iv.Length;
+                    Array.Copy(iv, 0, result, 1, iv.Length);
+                    Array.Copy(cipher, 0, result, 1 + iv.Length, cipher.Length);
+                    Array.Copy(tag, 0, result, 1 + iv.Length + cipher.Length, tag.Length);
+                    return result;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Расшифровывает пакет целиком (AES-256 CBC + HMAC-SHA256)
+        /// Ожидаемый формат: [1 байт длина IV][IV][cipher][HMAC(32)]
+        /// </summary>
+        private static byte[] DecryptPacket(byte[] encryptedPacket)
+        {
+            if (encryptedPacket == null || encryptedPacket.Length < 1 + 16 + 32)
+                throw new InvalidDataException("Encrypted packet too short");
+
+            int ivLength = encryptedPacket[0];
+            if (ivLength <= 0 || encryptedPacket.Length < 1 + ivLength + 32)
+                throw new InvalidDataException("Invalid IV length in encrypted packet");
+
+            int cipherLength = encryptedPacket.Length - 1 - ivLength - 32;
+            if (cipherLength <= 0)
+                throw new InvalidDataException("Encrypted packet has no cipher data");
+
+            byte[] iv = new byte[ivLength];
+            Array.Copy(encryptedPacket, 1, iv, 0, ivLength);
+
+            byte[] cipher = new byte[cipherLength];
+            Array.Copy(encryptedPacket, 1 + ivLength, cipher, 0, cipherLength);
+
+            byte[] tag = new byte[32];
+            Array.Copy(encryptedPacket, 1 + ivLength + cipherLength, tag, 0, 32);
+
+            using (var hmac = new HMACSHA256(EncryptionKey))
+            {
+                byte[] expectedTag = hmac.ComputeHash(Combine(iv, cipher));
+                if (!expectedTag.SequenceEqual(tag))
+                    throw new InvalidDataException("Encrypted packet HMAC mismatch");
+            }
+
+            using (var aes = Aes.Create())
+            {
+                aes.Key = EncryptionKey;
+                aes.IV = iv;
+                aes.Mode = CipherMode.CBC;
+                aes.Padding = PaddingMode.PKCS7;
+
+                using (var decryptor = aes.CreateDecryptor())
+                {
+                    return decryptor.TransformFinalBlock(cipher, 0, cipher.Length);
+                }
+            }
+        }
+
+        private static byte[] Combine(params byte[][] buffers)
+        {
+            int total = buffers.Where(b => b != null).Sum(b => b.Length);
+            byte[] result = new byte[total];
+            int offset = 0;
+            foreach (var buffer in buffers.Where(b => b != null))
+            {
+                Array.Copy(buffer, 0, result, offset, buffer.Length);
+                offset += buffer.Length;
+            }
+
+            return result;
         }
     }
 }
