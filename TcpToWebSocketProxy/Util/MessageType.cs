@@ -12,7 +12,12 @@ namespace UtilDataPacket
         Binary = 2,
         File = 3,
         Error = 4,
-        Disconnect = 5
+        Disconnect = 5,
+        // Новые типы для handshake
+        HandShakeRequest = 10,
+        PublicKey = 11,
+        EncryptedSymmetricKey = 12,
+        HandShakeComplete = 13
         // close !!! когда от iis приходит пакет чтобы закрыть соединение в случае чего либо 80 стр 
     }
     /// <summary>

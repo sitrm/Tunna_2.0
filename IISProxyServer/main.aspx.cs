@@ -13,6 +13,17 @@ using System.Web.WebSockets;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Security.Cryptography;
+using System.IdentityModel.Protocols.WSTrust;
+// Изменения:
+// - Добавил статический RSACryptoServiceProvider в класс для генерации RSA пары.
+// - В ProcessWebSocket: Добавил byte[] aesKey = null; per connection.
+// - В receive loop: Deserialize(completeMessage, aesKey)
+// - В ProcessPacketAsync: Добавил обработку handshake types.
+//   Если aesKey == null и type не handshake, error.
+//   Для HandShakeRequest: Отправить публичный ключ (null key).
+//   Для EncryptedSymmetricKey: Расшифровать AES ключ RSA, установить aesKey, отправить HandShakeComplete (с новым aesKey).
+// - DataPacket: Тот же, что и в клиенте (общий).
+// - Добавил проверки, чтобы требовать handshake перед обычными пакетами.
 
 namespace WSP
 {
@@ -39,6 +50,15 @@ namespace WSP
         // WebSocket → List<clientId> (для очистки при отключении)
         private static readonly ConcurrentDictionary<WebSocket, List<Guid>> _webSocketClients =
             new ConcurrentDictionary<WebSocket, List<Guid>>();
+        // Новый: AES ключ per WebSocket connection
+        private static readonly ConcurrentDictionary<WebSocket, byte[]>     _aesKeys =
+            new ConcurrentDictionary<WebSocket, byte[]>();
+        // Новый: RSA провайдер для сервера (генерируется статически)
+        private static readonly RSACryptoServiceProvider rsaProvider;
+        static WebSocketProxy()
+        {
+            rsaProvider = new RSACryptoServiceProvider(2048);
+        }
 
         //----------------------------------------------------------------------------------------------------
         protected void Page_Load(object sender, EventArgs e)
@@ -54,7 +74,11 @@ namespace WSP
             WebSocket webSocket = context.WebSocket;
             List<Guid> clientIdsForThisSocket = new List<Guid>();
             _webSocketClients[webSocket] = clientIdsForThisSocket;
-
+            // Новый: AES ключ per WebSocket connection
+            _aesKeys[webSocket] = null;
+            
+            
+            
             try
             {
                 while (webSocket.State == WebSocketState.Open)
@@ -86,10 +110,17 @@ namespace WSP
 
                             if (completeMessage.Length > 0)
                             {
-                                DataPacket packet = DataPacket.Deserialize(completeMessage);
+                                byte[] aesKey = _aesKeys[webSocket];
+                                DataPacket packet = DataPacket.Deserialize(completeMessage, aesKey);
                                 await ProcessPacketAsync(webSocket, packet, clientIdsForThisSocket);
+
                             }
                         }
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        System.Diagnostics.Trace.TraceError("Invalid packet: " + ex.Message);
+                        break;
                     }
                     catch (Exception ex)
                     {
@@ -117,16 +148,47 @@ namespace WSP
 
                 List<Guid> removedList;
                 _webSocketClients.TryRemove(webSocket, out removedList);
+                byte[] removedKey;
+                _aesKeys.TryRemove(webSocket, out removedKey);
             }
         }
 
         //----------------------------------------------------------------------------------------------------
         private async Task ProcessPacketAsync(WebSocket webSocket, DataPacket packet, List<Guid> clientIdsForThisSocket)
         {
+            byte[] aesKey = _aesKeys[webSocket];
+            // Требуем handshake перед обычными пакетами
+            if (aesKey == null && packet.Type != MessageType.HandShakeRequest && packet.Type != MessageType.EncryptedSymmetricKey)
+            {
+                throw new InvalidOperationException("Handshake required before processing this message type");
+            }
+
             try
             {
                 switch (packet.Type)
                 {
+                    case MessageType.HandShakeRequest:
+                        if (aesKey != null) throw new InvalidOperationException("Handshake already completed");
+                        // Отправляем публичный RSA ключ (без шифрования)
+                        string publicKeyXml = rsaProvider.ToXmlString(false);
+                        var pubKeyPacket = new DataPacket(Guid.Empty, MessageType.PublicKey, Encoding.UTF8.GetBytes(publicKeyXml), "", 0);
+                        byte[] pubSerialized = pubKeyPacket.Serialize(null);
+                        await webSocket.SendAsync(new ArraySegment<byte>(pubSerialized), WebSocketMessageType.Binary, true, CancellationToken.None);
+                        break;
+
+                    case MessageType.EncryptedSymmetricKey:
+                        //if (aesKey != null) throw new InvalidOperationException("Handshake already completed");
+                        // Расшифровываем AES ключ приватным RSA
+                        byte[] encryptedKey = packet.Data;
+                        byte[] decryptedKey = rsaProvider.Decrypt(encryptedKey, false);
+                        if (decryptedKey.Length != 32) throw new InvalidDataException("Invalid AES key length");
+                        _aesKeys[webSocket] = decryptedKey;  //!!!!!!!!!!!!!!!!!!!  Обновляем глобально
+                        //aesKey = _aesKeys[webSocket];
+                        // Отправляем подтверждение (зашифрованное новым AES)
+                        var completePacket = new DataPacket(Guid.Empty, MessageType.HandShakeComplete, Encoding.UTF8.GetBytes("OK"), "", 0);
+                        byte[] completeSer = completePacket.Serialize(decryptedKey);
+                        await webSocket.SendAsync(new ArraySegment<byte>(completeSer), WebSocketMessageType.Binary, true, CancellationToken.None);
+                        break;
                     case MessageType.Binary:
                         await ForwardToTcpServer(webSocket, packet, clientIdsForThisSocket);
                         break;
@@ -136,7 +198,7 @@ namespace WSP
                         break;
 
                     case MessageType.Disconnect:
-                        await ProcessDisconnect(packet.UserId);
+                        await ProcessDisconnect(packet.UserId, webSocket);
                         break;
                 }
             }
@@ -156,7 +218,7 @@ namespace WSP
             {
                 if (!clientConn.TcpClient.Connected)
                 {
-                    RemoveClient(packet.UserId);
+                    RemoveClient(packet.UserId, webSocket);
                     return;
                 }
 
@@ -170,7 +232,7 @@ namespace WSP
             catch (Exception ex)
             {
                 SendErrorResponse(webSocket, packet, ex);
-                RemoveClient(packet.UserId);
+                RemoveClient(packet.UserId, webSocket);
             }
         }
 
@@ -210,8 +272,8 @@ namespace WSP
                         target.Ip,
                         target.Port
                     );
-
-                    byte[] serialized = responsePacket.Serialize();
+                    byte[] aesKey = _aesKeys[webSocket];
+                    byte[] serialized = responsePacket.Serialize(aesKey);
 
                     try
                     {
@@ -238,7 +300,7 @@ namespace WSP
             finally
             {
                 // RemoveClient вызывается только здесь, не дублируется
-                RemoveClient(clientId);
+                RemoveClient(clientId, webSocket);
             }
         }
 
@@ -283,6 +345,7 @@ namespace WSP
                 // Добавляем в словарь и запускаем задачу чтения только если успешно добавили
                 if (_clients.TryAdd(clientId, clientConn))
                 {
+                    // Передаем aesKey в ReadFromTcpServer
                     // Запускаем задачу чтения из TCP (без Task.Run, так как это IO-bound операция)
                     clientConn.ReadingTask = ReadFromTcpServer(clientId, client, webSocket, target);
                     return clientConn;
@@ -320,23 +383,23 @@ namespace WSP
         }
 
         //----------------------------------------------------------------------------------------------------
-        private async Task ProcessDisconnect(Guid clientId)
+        private async Task ProcessDisconnect(Guid clientId, WebSocket webSocket)
         {
             // Получаем данные перед удалением
             ClientConnection clientConn;
-            WebSocket ws = null;
             ConnectionTarget target = null;
+            byte[] aesKey = _aesKeys[webSocket];
 
             if (_clients.TryGetValue(clientId, out clientConn))
             {
-                ws = clientConn.WebSocket;
                 target = clientConn.Target;
+                // aesKey per ws, but since ws known, but to simplify, assume aesKey available (from context)
             }
 
-            RemoveClient(clientId);
+            RemoveClient(clientId, webSocket);
 
             // Отправляем подтверждение отключения после удаления
-            if (ws != null && ws.State == WebSocketState.Open && target != null)
+            if (webSocket != null && webSocket.State == WebSocketState.Open && target != null)
             {
                 try
                 {
@@ -348,10 +411,10 @@ namespace WSP
                         target.Port
                     );
 
-                    byte[] data = response.Serialize();
-                    if (ws.State == WebSocketState.Open)
+                    byte[] data = response.Serialize(aesKey);
+                    if (webSocket.State == WebSocketState.Open)
                     {
-                        await ws.SendAsync(
+                        await webSocket.SendAsync(
                             new ArraySegment<byte>(data),
                             WebSocketMessageType.Binary,
                             true,
@@ -377,8 +440,8 @@ namespace WSP
                     packet.TargetIp,
                     packet.TargetPort
                 );
-
-                byte[] data = errorPacket.Serialize();
+                byte[] aesKey = _aesKeys[webSocket];
+                byte[] data = errorPacket.Serialize(aesKey);
 
                 // Двойная проверка состояния перед отправкой
                 if (webSocket.State == WebSocketState.Open)
@@ -408,8 +471,8 @@ namespace WSP
                     target.Ip,
                     target.Port
                 );
-
-                byte[] data = packet.Serialize();
+                byte[] aesKey = _aesKeys[webSocket];
+                byte[] data = packet.Serialize(aesKey);
                 if (webSocket.State == WebSocketState.Open)
                 {
                     await webSocket.SendAsync(
@@ -423,7 +486,7 @@ namespace WSP
         }
 
         //-----------------------------------------------------------------------
-        private void RemoveClient(Guid clientId)
+        private void RemoveClient(Guid clientId, WebSocket webSocket)
         {
             ClientConnection clientConn;
             if (_clients.TryRemove(clientId, out clientConn))
@@ -464,7 +527,7 @@ namespace WSP
             {
                 foreach (Guid clientId in clientIds)
                 {
-                    RemoveClient(clientId);
+                    RemoveClient(clientId, webSocket);
                 }
                 clientIds.Clear();
             }
@@ -491,7 +554,12 @@ namespace UtilDataPacket
         Binary = 2,
         File = 3,
         Error = 4,
-        Disconnect = 5
+        Disconnect = 5,
+        // Новые типы для handshake
+        HandShakeRequest = 10,
+        PublicKey = 11,
+        EncryptedSymmetricKey = 12,
+        HandShakeComplete = 13
         // close !!! когда от iis приходит пакет чтобы закрыть соединение в случае чего либо 80 стр 
     }
     /// <summary>
@@ -525,17 +593,12 @@ namespace UtilDataPacket
     {
 
         private const uint MAGIC_NUMBER = 0xDEADBEEF; //(4 байта)
-        private const string EncryptionKeyBase64 = "hVgR/6pAo0PfrxGX2YeliYg+6TS//N/xGaxzwoMPmxk="; // 256-bit ключ
-        private static readonly byte[] EncryptionKey = Convert.FromBase64String(EncryptionKeyBase64);
-
         public Guid UserId { get; set; }
         public MessageType Type { get; set; }
         public byte[] Data { get; set; }
         public string TargetIp { get; set; }
         public int TargetPort { get; set; }
-        public DataPacket()
-        {
-        }
+        public DataPacket() { }
         public DataPacket(Guid userId, MessageType type, byte[] data, string targetIp, int targetPort) : this()
         {
             UserId = userId;    // 16 
@@ -593,7 +656,7 @@ namespace UtilDataPacket
         /// <summary>
         /// Сериализация пакета в массив байт
         /// </summary>
-        public byte[] Serialize()
+        public byte[] Serialize(byte[] encryptionKey)
         {
             using (var ms = new MemoryStream())
             using (var writer = new BinaryWriter(ms))
@@ -627,20 +690,28 @@ namespace UtilDataPacket
                     writer.Write(Data);
 
                 var plainPacket = ms.ToArray();
-                return EncryptPacket(plainPacket);
+                // Если ключ null, не шифруем (для handshake)
+                if (encryptionKey == null)
+                    return plainPacket;
+                else
+                    return EncryptPacket(plainPacket, encryptionKey);
             }
         }
 
         /// <summary>
         /// Десериализация пакета из массива байт
         /// </summary>
-        public static DataPacket Deserialize(byte[] data)
+        public static DataPacket Deserialize(byte[] data, byte[] encryptionKey)
         {
             if (data == null || data.Length < 33)
                 // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 1(ipver) + 4(port) + 4(dataLen) + 4(checksum)
                 throw new InvalidDataException("Packet too short or null");
 
-            var decrypted = DecryptPacket(data);
+            byte[] decrypted;
+            if (encryptionKey == null)
+                decrypted = data;
+            else
+                decrypted = DecryptPacket(data, encryptionKey);
 
             using (var ms = new MemoryStream(decrypted))
             using (var reader = new BinaryReader(ms))
@@ -683,10 +754,8 @@ namespace UtilDataPacket
                 }
                 // Чтение TargetPort 4 
                 var targetPort = reader.ReadInt32();
-
                 // Чтение длины данных
                 var dataLength = reader.ReadInt32();
-
                 // Чтение данных
                 byte[] packetData = null;
                 if (dataLength > 0)
@@ -714,14 +783,15 @@ namespace UtilDataPacket
         /// Шифрует пакет целиком (AES-256 CBC + HMAC-SHA256)
         /// Формат: [1 байт длина IV][IV][cipher][HMAC(32)]
         /// </summary>
-        private static byte[] EncryptPacket(byte[] plainPacket)
+        private static byte[] EncryptPacket(byte[] plainPacket, byte[] key)
         {
             if (plainPacket == null) throw new ArgumentNullException("plainPacket");
+            if (key == null || key.Length != 32) throw new ArgumentException("Invalid encryption key");
 
             using (var aes = Aes.Create())
-            using (var hmac = new HMACSHA256(EncryptionKey))
+            using (var hmac = new HMACSHA256(key))
             {
-                aes.Key = EncryptionKey;
+                aes.Key = key;
                 aes.Mode = CipherMode.CBC;
                 aes.Padding = PaddingMode.PKCS7;
                 aes.GenerateIV();
@@ -748,10 +818,11 @@ namespace UtilDataPacket
         /// Расшифровывает пакет целиком (AES-256 CBC + HMAC-SHA256)
         /// Ожидаемый формат: [1 байт длина IV][IV][cipher][HMAC(32)]
         /// </summary>
-        private static byte[] DecryptPacket(byte[] encryptedPacket)
+        private static byte[] DecryptPacket(byte[] encryptedPacket, byte[] key)
         {
             if (encryptedPacket == null || encryptedPacket.Length < 1 + 16 + 32)
                 throw new InvalidDataException("Encrypted packet too short");
+            if (key == null || key.Length != 32) throw new ArgumentException("Invalid encryption key");
 
             int ivLength = encryptedPacket[0];
             if (ivLength <= 0 || encryptedPacket.Length < 1 + ivLength + 32)
@@ -770,7 +841,7 @@ namespace UtilDataPacket
             byte[] tag = new byte[32];
             Array.Copy(encryptedPacket, 1 + ivLength + cipherLength, tag, 0, 32);
 
-            using (var hmac = new HMACSHA256(EncryptionKey))
+            using (var hmac = new HMACSHA256(key))
             {
                 byte[] expectedTag = hmac.ComputeHash(Combine(iv, cipher));
                 if (!expectedTag.SequenceEqual(tag))
@@ -779,7 +850,7 @@ namespace UtilDataPacket
 
             using (var aes = Aes.Create())
             {
-                aes.Key = EncryptionKey;
+                aes.Key = key;
                 aes.IV = iv;
                 aes.Mode = CipherMode.CBC;
                 aes.Padding = PaddingMode.PKCS7;
@@ -790,7 +861,6 @@ namespace UtilDataPacket
                 }
             }
         }
-
         private static byte[] Combine(params byte[][] buffers)
         {
             int total = buffers.Where(b => b != null).Sum(b => b.Length);
