@@ -1,16 +1,36 @@
-# Tunna_2.0
+# Tunna 2.0
 
+## Brief Description
 
-Краткое описание
------------------
+Tunna 2.0 is a secure TCP tunneling solution that enables communication between TCP clients and servers through WebSocket connections. The project consists of two main components:
 
-Tunna_2.0 — прокси-сервер, который организует удаленный доступ к TCP сервисам через веб-интерфейс Microsoft IIS. Проект содержит два основных компонента:
+- **TcpToWebSocketProxy** — A .NET console application that listens on one or multiple TCP ports and forwards data through WebSocket to a web server.
+- **IISProxyServer** — A web wrapper (ASPX) for receiving WebSocket connections on the server side (used as a message receiver and gateway to target TCP services on the server side).
 
-- `TcpToWebSocketProxy` — консольное приложение на .NET, которое слушает один или несколько TCP-портов и пересылает данные через WebSocket на веб-сервер.
-- `IISProxyServer` —  веб-обёртка (ASPX) для приёма WebSocket-соединений со стороны сервера (используется как приёмник сообщений и шлюз в целевые TCP-сервисы на стороне сервера).
+## Security Features
 
-Общая схема передачи данных:
-------------------------
+### End-to-End Encryption
+
+Tunna 2.0 implements a robust security model using hybrid encryption:
+
+1. **RSA Handshake**: Initial key exchange using RSA-2048 asymmetric encryption
+2. **AES-256 Encryption**: Symmetric encryption for all subsequent data transmission
+3. **HMAC-SHA256**: Message integrity verification
+
+#### Handshake Process:
+1. Client sends `HandShakeRequest` to initiate secure connection
+2. Server responds with RSA public key (`PublicKey` message)
+3. Client generates random AES-256 key, encrypts it with server's RSA public key, and sends it (`EncryptedSymmetricKey`)
+4. Server decrypts AES key and confirms handshake completion (`HandShakeComplete`)
+5. All subsequent communication is encrypted with the negotiated AES key
+
+#### Encryption Details:
+- **Symmetric Algorithm**: AES-256 in CBC mode with PKCS7 padding
+- **Key Derivation**: Random 256-bit keys generated per session
+- **Integrity**: HMAC-SHA256 for message authentication
+- **Packet Format**: `[IV length (1 byte)][IV][Encrypted data][HMAC (32 bytes)]`
+
+## Data Transmission Architecture
 
 ```
 +------------+       +---------------------+       +-------------------+       +---------------------+
@@ -18,20 +38,17 @@ Tunna_2.0 — прокси-сервер, который организует у�
 +------------+       +---------------------+       +-------------------+       +---------------------+
 ```
 
-Конфигурация
--------------------------
+## Configuration
 
-Файл конфигурации должен находиться рядом с исполняемым файлом
+The configuration file must be located next to the executable file.
 
+### Example Configuration:
 
-
-Пример:
-
-```
+```json
 {
   "webSocketUrl": "ws://localhost/IIS/main.aspx",
-  "tcpBufferSize": 32000,
-  "webSocketBufferSize": 32000,
+  "tcpBufferSize": 65400,
+  "webSocketBufferSize": 65400,
   "maxWebSocketMessageSize": 1048576,
   "portMappings": [
     {
@@ -48,44 +65,69 @@ Tunna_2.0 — прокси-сервер, который организует у�
       "listenPort": 11111,
       "targetIp": "127.0.0.1",
       "targetPort": 12345
-    },
-	{
-      "listenPort": 5222,
-      "targetIp": "127.0.0.1",
-      "targetPort": 5201
     }
   ]
 }
 ```
 
-Краткая инструкция по запуску
-----------------------------
+### Configuration Parameters:
+- `webSocketUrl`: WebSocket endpoint URL for IIS proxy server
+- `tcpBufferSize`: Buffer size for TCP data transmission (default: 65400 bytes)
+- `webSocketBufferSize`: Buffer size for WebSocket communication (default: 65400 bytes)
+- `maxWebSocketMessageSize`: Maximum allowed WebSocket message size (default: 1MB)
+- `portMappings`: Array of port forwarding rules
 
-Требования:
-- .NET SDK/Runtime (проект TargetFramework: net8.0)
+## Quick Start Guide
 
-Запуск из исходников (рекомендуется для отладки):
+### Requirements:
+- .NET SDK/Runtime (Target Framework: net8.0)
 
-1. Откройте командную строку в папке `TcpToWebSocketProxy`.
-2. При желании измените `proxyconfig.json` (например, `webSocketUrl` и сопоставления портов).
-3. Запустите приложение через `dotnet run` или соберите и запустите исполняемый файл:
+### Running from Source (Recommended for Debugging):
+
+1. Open command line in the `TcpToWebSocketProxy` folder.
+2. Optionally modify `proxyconfig.json` (e.g., `webSocketUrl` and port mappings).
+3. Run the application via `dotnet run` or build and run the executable:
 
 ```cmd
 cd TcpToWebSocketProxy
 dotnet run --project TcpToWebSocketProxy.csproj
 ```
 
-Вы также можете указать альтернативный путь к файлу конфигурации при запуске:
+You can also specify an alternative configuration file path at startup:
 
 ```cmd
 dotnet run --project TcpToWebSocketProxy.csproj -- "C:\path\to\your\proxyconfig.json"
 ```
 
-После успешного старта консоль выведет информацию о WebSocket URL, размере буфера и списке портов.
-Нажмите `Q` в консоли, чтобы корректно остановить сервер.
+After successful startup, the console will display information about WebSocket URL, buffer sizes, and the list of ports.
+Press `Q` in the console to gracefully stop the server.
 
-Развёртывание IISProxyServer
-----------------------------
+## IIS Proxy Server Deployment
 
-`IISProxyServer` — это простая веб-страница/endpoint (ASPX). Разверните содержимое папки `IISProxyServer` в приложении IIS (или в виртуальной директории вашего веб-сервера). Убедитесь, что WebSocket поддерживается и включён в IIS (Windows feature).
+The `IISProxyServer` is a simple web page/endpoint (ASPX). Deploy the contents of the `IISProxyServer` folder to an IIS application (or virtual directory of your web server). Ensure that WebSocket support is enabled and active in IIS (Windows feature).
 
+### IIS Requirements:
+- WebSocket Protocol enabled
+- ASP.NET support
+- Appropriate permissions for the application pool
+
+## Use Cases
+
+- **Database Access**: Secure remote access to databases through firewalls
+- **SSH Tunneling**: Encrypted SSH connections through WebSocket
+- **Legacy System Integration**: Access to systems behind restrictive firewalls
+- **Development Environments**: Secure access to development servers
+
+## Security Considerations
+
+- All data transmission is encrypted end-to-end
+- Per-session encryption keys prevent key reuse attacks
+- RSA handshake ensures secure key exchange
+- HMAC verification prevents message tampering
+- Handshake requirement prevents unauthorized connections
+
+## Troubleshooting
+
+- Ensure WebSocket feature is enabled in IIS
+- Verify firewall settings allow WebSocket connections
+- Check that target TCP services are accessible from IIS server
