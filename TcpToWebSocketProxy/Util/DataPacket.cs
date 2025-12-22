@@ -33,17 +33,12 @@ namespace UtilDataPacket
     {
 
         private const uint MAGIC_NUMBER = 0xDEADBEEF; //(4 байта)
-        private const string EncryptionKeyBase64 = "hVgR/6pAo0PfrxGX2YeliYg+6TS//N/xGaxzwoMPmxk="; // 256-bit ключ
-        private static readonly byte[] EncryptionKey = Convert.FromBase64String(EncryptionKeyBase64);
-
         public Guid UserId { get; set; }
         public MessageType Type { get; set; }
         public byte[] Data { get; set; }
         public string TargetIp { get; set; }
         public int TargetPort { get; set; }
-        public DataPacket()
-        {
-        }
+        public DataPacket() {}
         public DataPacket(Guid userId, MessageType type, byte[] data, string targetIp, int targetPort) : this()
         {
             UserId = userId;    // 16 
@@ -101,7 +96,7 @@ namespace UtilDataPacket
         /// <summary>
         /// Сериализация пакета в массив байт
         /// </summary>
-        public byte[] Serialize()
+        public byte[] Serialize(byte[] encryptionKey)
         {
             using (var ms = new MemoryStream())
             using (var writer = new BinaryWriter(ms))
@@ -135,20 +130,28 @@ namespace UtilDataPacket
                     writer.Write(Data);
 
                 var plainPacket = ms.ToArray();
-                return EncryptPacket(plainPacket);
+                // Если ключ null, не шифруем (для handshake)
+                if (encryptionKey == null)
+                    return plainPacket;
+                else
+                    return EncryptPacket(plainPacket, encryptionKey);
             }
         }
 
         /// <summary>
         /// Десериализация пакета из массива байт
         /// </summary>
-        public static DataPacket Deserialize(byte[] data)
+        public static DataPacket Deserialize(byte[] data, byte[] encryptionKey)
         {
             if (data == null || data.Length < 33)
                 // Минимальный размер: 4(magic) + 16(Guid) + 4(type) + 1(ipver) + 4(port) + 4(dataLen) + 4(checksum)
                 throw new InvalidDataException("Packet too short or null");
 
-            var decrypted = DecryptPacket(data);
+            byte[] decrypted;
+            if (encryptionKey == null)
+                decrypted = data;
+            else
+                decrypted = DecryptPacket(data, encryptionKey);
 
             using (var ms = new MemoryStream(decrypted))
             using (var reader = new BinaryReader(ms))
@@ -191,10 +194,8 @@ namespace UtilDataPacket
                 }
                 // Чтение TargetPort 4 
                 var targetPort = reader.ReadInt32();
-
                 // Чтение длины данных
                 var dataLength = reader.ReadInt32();
-
                 // Чтение данных
                 byte[] packetData = null;
                 if (dataLength > 0)
@@ -222,14 +223,15 @@ namespace UtilDataPacket
         /// Шифрует пакет целиком (AES-256 CBC + HMAC-SHA256)
         /// Формат: [1 байт длина IV][IV][cipher][HMAC(32)]
         /// </summary>
-        private static byte[] EncryptPacket(byte[] plainPacket)
+        private static byte[] EncryptPacket(byte[] plainPacket, byte[] key)
         {
             if (plainPacket == null) throw new ArgumentNullException("plainPacket");
+            if (key == null || key.Length != 32) throw new ArgumentException("Invalid encryption key");
 
             using (var aes = Aes.Create())
-            using (var hmac = new HMACSHA256(EncryptionKey))
+            using (var hmac = new HMACSHA256(key))
             {
-                aes.Key = EncryptionKey;
+                aes.Key = key;
                 aes.Mode = CipherMode.CBC;
                 aes.Padding = PaddingMode.PKCS7;
                 aes.GenerateIV();
@@ -256,10 +258,11 @@ namespace UtilDataPacket
         /// Расшифровывает пакет целиком (AES-256 CBC + HMAC-SHA256)
         /// Ожидаемый формат: [1 байт длина IV][IV][cipher][HMAC(32)]
         /// </summary>
-        private static byte[] DecryptPacket(byte[] encryptedPacket)
+        private static byte[] DecryptPacket(byte[] encryptedPacket, byte[] key)
         {
             if (encryptedPacket == null || encryptedPacket.Length < 1 + 16 + 32)
                 throw new InvalidDataException("Encrypted packet too short");
+            if (key == null || key.Length != 32) throw new ArgumentException("Invalid encryption key");
 
             int ivLength = encryptedPacket[0];
             if (ivLength <= 0 || encryptedPacket.Length < 1 + ivLength + 32)
@@ -278,7 +281,7 @@ namespace UtilDataPacket
             byte[] tag = new byte[32];
             Array.Copy(encryptedPacket, 1 + ivLength + cipherLength, tag, 0, 32);
 
-            using (var hmac = new HMACSHA256(EncryptionKey))
+            using (var hmac = new HMACSHA256(key))
             {
                 byte[] expectedTag = hmac.ComputeHash(Combine(iv, cipher));
                 if (!expectedTag.SequenceEqual(tag))
@@ -287,7 +290,7 @@ namespace UtilDataPacket
 
             using (var aes = Aes.Create())
             {
-                aes.Key = EncryptionKey;
+                aes.Key = key;
                 aes.IV = iv;
                 aes.Mode = CipherMode.CBC;
                 aes.Padding = PaddingMode.PKCS7;
@@ -298,7 +301,6 @@ namespace UtilDataPacket
                 }
             }
         }
-
         private static byte[] Combine(params byte[][] buffers)
         {
             int total = buffers.Where(b => b != null).Sum(b => b.Length);
