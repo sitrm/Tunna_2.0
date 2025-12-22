@@ -28,7 +28,6 @@ Tunna 2.0 implements a robust security model using hybrid encryption:
 - **Symmetric Algorithm**: AES-256 in CBC mode with PKCS7 padding
 - **Key Derivation**: Random 256-bit keys generated per session
 - **Integrity**: HMAC-SHA256 for message authentication
-- **Packet Format**: `[IV length (1 byte)][IV][Encrypted data][HMAC (32 bytes)]`
 
 ## Data Transmission Architecture
 
